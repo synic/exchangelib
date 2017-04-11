@@ -1,29 +1,25 @@
 from __future__ import unicode_literals
 
+from copy import deepcopy
+from decimal import Decimal
 import io
 import itertools
 import logging
 import re
 import socket
 import time
-from copy import deepcopy
-from datetime import datetime
-from decimal import Decimal
-from xml.etree.ElementTree import Element
+from xml.etree.ElementTree import Element, fromstring, ParseError
 
 from future.moves.urllib.parse import urlparse
+from future.moves._thread import get_ident
 from future.utils import PY2
-from six import text_type, string_types
 import requests.exceptions
+from six import text_type, string_types
 
 from .errors import TransportError, RateLimitError, RedirectError, RelativeRedirect, CASError, UnauthorizedError, \
     ErrorInvalidSchemaVersionForMailboxVersion
 
-if PY2:
-    from thread import get_ident
-
-else:
-    from threading import get_ident
+time_func = time.time if PY2 else time.monotonic
 
 
 log = logging.getLogger(__name__)
@@ -35,6 +31,7 @@ string_type = string_types[0]
 _illegal_xml_chars_RE = re.compile('[\x00-\x08\x0b\x0c\x0e-\x1F\uD800-\uDFFF\uFFFE\uFFFF]')
 # UTF-8 byte order mark which may precede the XML from an Exchange server
 BOM = '\xef\xbb\xbf'
+BOM_LEN = len(BOM)
 
 
 def chunkify(iterable, chunksize):
@@ -43,7 +40,7 @@ def chunkify(iterable, chunksize):
     """
     from .queryset import QuerySet
     if hasattr(iterable, '__getitem__') and not isinstance(iterable, QuerySet):
-        # list, tuple. QuerySet has __getitem__ but that evaluates the entire query greedily. We don't want that here.
+        # tuple, list. QuerySet has __getitem__ but that evaluates the entire query greedily. We don't want that here.
         for i in range(0, len(iterable), chunksize):
             yield iterable[i:i + chunksize]
     else:
@@ -63,11 +60,13 @@ def peek(iterable):
     Checks if an iterable is empty and returns status and the rewinded iterable
     """
     from .queryset import QuerySet
+    if isinstance(iterable, QuerySet):
+        # QuerySet has __len__ but that evaluates the entire query greedily. We don't want that here. Instead, peek()
+        # should be called on QuerySet.iterator()
+        raise ValueError('Cannot peek on a QuerySet')
     assert not isinstance(iterable, QuerySet)
-    # QuerySet has __len__ but that evaluates the entire query greedily. We don't want that here. Instead, peek() should
-    # be called on QuerySet.iterator()
     if hasattr(iterable, '__len__'):
-        # list, tuple, set
+        # tuple, list, set
         return len(iterable) == 0, iterable
     else:
         # generator
@@ -109,8 +108,10 @@ def get_xml_attrs(tree, name):
 
 
 def value_to_xml_text(value):
+    # We can't handle bytes in this function because str == bytes on Python2
     from .ewsdatetime import EWSDateTime
-    from .folders import Attendee, Mailbox, EmailAddress, PhoneNumber
+    from .indexed_properties import PhoneNumber, EmailAddress
+    from .properties import Mailbox, Attendee
     if isinstance(value, string_types):
         return safe_xml_value(value)
     if isinstance(value, bool):
@@ -130,35 +131,26 @@ def value_to_xml_text(value):
     raise ValueError('Unsupported type: %s (%s)' % (type(value), value))
 
 
-def xml_text_to_value(value, field_type):
-    if value is None:
-        return None
+def xml_text_to_value(value, value_type):
+    # We can't handle bytes in this function because str == bytes on Python2
     from .ewsdatetime import EWSDateTime
-    from .folders import Choice, Email, AnyURI, Body, HTMLBody, MimeContent
-    if field_type == string_type:
+    if value_type == string_type:
         # Return builtin str unprocessed
         return value
-    if field_type == bytes:
-        # Return builtin bytes unprocessed. The XML returns binary data as plain strings, so we'll leave it to the
-        # caller to decide how to decode.
-        return value
-    if field_type in (Choice, Email, AnyURI, Body, HTMLBody, MimeContent):
-        # Cast string-like values to their intended class
-        return field_type(value)
     return {
         bool: lambda v: True if v == 'true' else False if v == 'false' else None,
-        int: lambda v: int(v),
-        Decimal: lambda v: Decimal(v),
-        EWSDateTime: lambda v: EWSDateTime.from_string(v),
-    }[field_type](value)
+        int: int,
+        Decimal: Decimal,
+        EWSDateTime: EWSDateTime.from_string,
+    }[value_type](value)
 
 
 def set_xml_value(elem, value, version):
     from .folders import EWSElement
     from .ewsdatetime import EWSDateTime
-    if isinstance(value, (string_types + (bool, int, Decimal, EWSDateTime))):
+    if isinstance(value, string_types + (bool, bytes, int, Decimal, EWSDateTime)):
         elem.text = value_to_xml_text(value)
-    elif isinstance(value, (tuple, list)):
+    elif isinstance(value, (tuple, list, set)):
         for v in value:
             if isinstance(v, EWSElement):
                 assert version
@@ -168,14 +160,14 @@ def set_xml_value(elem, value, version):
             elif isinstance(v, string_types):
                 add_xml_child(elem, 't:String', v)
             else:
-                raise AttributeError('Unsupported type %s for list value %s on elem %s' % (type(v), v, elem))
+                raise ValueError('Unsupported type %s for list element %s on elem %s' % (type(v), v, elem))
     elif isinstance(value, EWSElement):
         assert version
         elem.append(value.to_xml(version=version))
     elif isinstance(value, ElementType):
         elem.append(value)
     else:
-        raise AttributeError('Unsupported type %s for value %s on elem %s' % (type(value), value, elem))
+        raise ValueError('Unsupported type %s for value %s on elem %s' % (type(value), value, elem))
     return elem
 
 
@@ -201,28 +193,33 @@ def add_xml_child(tree, name, value):
     tree.append(set_xml_value(elem=create_element(name), value=value, version=None))
 
 
-def to_xml(text, encoding):
-    from xml.etree.ElementTree import fromstring, ParseError
-    processed = text.lstrip(BOM).encode(encoding or 'utf-8')
+def to_xml(text):
     try:
-        return fromstring(processed)
+        if PY2:
+            # On python2, fromstring expects an encoded string
+            return fromstring((text[BOM_LEN:] if text.startswith(BOM) else text).encode('utf-8'))
+        return fromstring(text[BOM_LEN:] if text.startswith(BOM) else text)
     except ParseError:
-        from io import BytesIO
         from lxml.etree import XMLParser, parse, tostring
         # Exchange servers may spit out the weirdest XML. lxml is pretty good at recovering from errors
         log.warning('Fallback to lxml processing of faulty XML')
-        magical_parser = XMLParser(encoding=encoding or 'utf-8', recover=True)
-        root = parse(BytesIO(processed), magical_parser)
+        magical_parser = XMLParser(recover=True)
+        no_bom_text = text[BOM_LEN:] if text.startswith(BOM) else text
+        root = parse(io.BytesIO(no_bom_text.encode('utf-8')), magical_parser)
         try:
             return fromstring(tostring(root))
         except ParseError as e:
-            line_no, col_no = e.lineno, e.offset
+            if hasattr(e, 'position'):
+                e.lineno, e.offset = e.position
+            if not e.lineno:
+                raise ParseError('%s' % text_type(e))
             try:
-                offending_line = processed.splitlines()[line_no - 1]
+                offending_line = no_bom_text.splitlines()[e.lineno - 1]
             except IndexError:
-                offending_line = ''
-            offending_excerpt = offending_line[max(0, col_no - 20):col_no + 20].decode('ascii', 'ignore')
-            raise ParseError('%s\nOffending text: [...]%s[...]' % (text_type(e), offending_excerpt))
+                raise ParseError('%s' % text_type(e))
+            else:
+                offending_excerpt = offending_line[max(0, e.offset - 20):e.offset + 20]
+                raise ParseError('%s\nOffending text: [...]%s[...]' % (text_type(e), offending_excerpt))
         except TypeError:
             raise ParseError('This is not XML: %s' % text)
 
@@ -231,7 +228,9 @@ def is_xml(text):
     """
     Helper function. Lightweight test if response is an XML doc
     """
-    return text.lstrip(BOM)[0:5] == '<?xml'
+    if text.startswith(BOM):
+        return text[BOM_LEN:BOM_LEN + 5] == '<?xml'
+    return text[:5] == '<?xml'
 
 
 class DummyRequest(object):
@@ -268,7 +267,7 @@ def get_redirect_url(response, allow_relative=True, require_relative=False):
     redirect_has_ssl, redirect_server, redirect_path = split_url(redirect_url)
     # The response may have been redirected already. Get the original URL
     request_url = response.history[0] if response.history else response.url
-    request_has_ssl, request_server, request_path = split_url(request_url)
+    request_has_ssl, request_server, _ = split_url(request_url)
     response_has_ssl, response_server, response_path = split_url(response.url)
 
     if not redirect_server:
@@ -286,10 +285,9 @@ def get_redirect_url(response, allow_relative=True, require_relative=False):
         raise RelativeRedirect(redirect_url)
     if require_relative and (request_has_ssl != response_has_ssl or request_server != redirect_server):
         raise RelativeRedirect(redirect_url)
-    return redirect_url, redirect_server, redirect_has_ssl
+    return redirect_url
 
 
-MAX_WAIT = 3600  # seconds
 MAX_REDIRECTS = 5  # Define a max redirection count. We don't want to be sent into an endless redirect loop
 
 # A collection of error classes we want to handle as general connection errors
@@ -302,7 +300,7 @@ if not PY2:
 
 def post_ratelimited(protocol, session, url, headers, data, timeout=None, verify=True, allow_redirects=False):
     """
-    There are two error-handling policies implemented here: a fail-fast policy intended for stnad-alone scripts which
+    There are two error-handling policies implemented here: a fail-fast policy intended for stand-alone scripts which
     fails on all responses except HTTP 200. The other policy is intended for long-running tasks that need to respect
     rate-limiting errors from the server and paper over outages of up to 1 hour.
 
@@ -323,7 +321,6 @@ def post_ratelimited(protocol, session, url, headers, data, timeout=None, verify
     The contract on sessions here is to return the session that ends up being used, or retiring the session if we
     intend to raise an exception. We give up on max_wait timeout, not number of retries
     """
-    r = None
     wait = 10  # seconds
     redirects = 0
     log_msg = '''\
@@ -339,15 +336,19 @@ Allow redirects: %(allow_redirects)s
 Response time: %(response_time)s
 Status code: %(status_code)s
 Request headers: %(request_headers)s
-Response headers: %(response_headers)s'''
+Response headers: %(response_headers)s
+Request data: %(request_data)s
+Response data: %(response_data)s
+'''
     log_vals = dict(i=0, wait=0, timeout=timeout, session_id=session.session_id, thread_id=get_ident(),
-                    auth=session.auth, url=url, response_time=None, status_code=None, request_headers=headers,
-                    response_headers=None, verify=verify, allow_redirects=allow_redirects)
+                    auth=session.auth, url=url, verify=verify, allow_redirects=allow_redirects, response_time=None,
+                    status_code=None, request_headers=headers, response_headers=None, request_data=data,
+                    response_data=None)
     try:
         while True:
             log.debug('Session %(session_id)s thread %(thread_id)s: retry %(i)s timeout %(timeout)s POST\'ing to '
                       '%(url)s after %(wait)s s wait', log_vals)
-            d1 = datetime.now()
+            d1 = time_func()
             try:
                 r = session.post(url=url, headers=headers, data=data, allow_redirects=False, timeout=timeout,
                                  verify=verify)
@@ -358,14 +359,13 @@ Response headers: %(response_headers)s'''
                 r = DummyResponse()
                 r.request.headers = headers
                 r.headers = {'TimeoutException': e}
-            d2 = datetime.now()
-            log_vals['response_time'] = text_type(d2 - d1)
+            d2 = time_func()
+            log_vals['response_time'] = d2 - d1
             log_vals['status_code'] = r.status_code
             log_vals['request_headers'] = r.request.headers
             log_vals['response_headers'] = r.headers
+            log_vals['response_data'] = getattr(r, 'text', '')
             log.debug(log_msg, log_vals)
-            log.debug('Request data: %s', data)
-            log.debug('Response data: %s', getattr(r, 'text'))
             # The genericerrorpage.htm/internalerror.asp is ridiculous behaviour for random outages. Redirect to
             # '/internalsite/internalerror.asp' or '/internalsite/initparams.aspx' is caused by e.g. SSL certificate
             # f*ckups on the Exchange server.
@@ -379,11 +379,11 @@ Response headers: %(response_headers)s'''
                 if r.status_code not in (302, 401, 503):
                     # Only retry if we didn't get a useful response
                     break
-                if not protocol.credentials.is_service_account:
+                if protocol.credentials.fail_fast:
                     break
                 log_vals['i'] += 1
                 log_vals['wait'] = wait
-                if wait > MAX_WAIT:
+                if wait > protocol.credentials.max_wait:
                     # We lost patience. Session is cleaned up in outer loop
                     raise RateLimitError(
                         'Session %(session_id)s URL %(url)s: Max timeout reached' % log_vals)
@@ -398,7 +398,7 @@ Response headers: %(response_headers)s'''
             if r.status_code == 302:
                 # If we get a normal 302 redirect, requests will issue a GET to that URL. We still want to POST
                 try:
-                    redirect_url, server, has_ssl = get_redirect_url(response=r, allow_relative=False)
+                    redirect_url = get_redirect_url(response=r, allow_relative=False)
                 except RelativeRedirect as e:
                     log.debug("'allow_redirects' only supports relative redirects (%s -> %s)", url, e.value)
                     raise RedirectError(url=e.value)
@@ -421,13 +421,6 @@ Response headers: %(response_headers)s'''
         log_msg = '%(exc_cls)s: %(exc_msg)s\n' + log_msg
         log_vals['exc_cls'] = e.__class__.__name__
         log_vals['exc_msg'] = text_type(e)
-        log_msg += '\nRequest data: %(data)s'
-        log_vals['data'] = data
-        log_msg += '\nResponse data: %(text)s'
-        try:
-            log_vals['text'] = r.text
-        except (NameError, AttributeError):
-            log_vals['text'] = ''
         log.error(log_msg, log_vals)
         protocol.retire_session(session)
         raise
@@ -444,27 +437,12 @@ Response headers: %(response_headers)s'''
             raise ErrorInvalidSchemaVersionForMailboxVersion('Invalid server version')
         if 'The referenced account is currently locked out' in r.text:
             raise TransportError('The service account is currently locked out')
-        if r.status_code == 401 and not protocol.credentials.is_service_account:
+        if r.status_code == 401 and protocol.credentials.fail_fast:
             # This is a login failure
             raise UnauthorizedError('Wrong username or password for %s' % url)
-        # This could be anything. Let higher layers handle this
-        log_msg += '\nRequest data: %(data)s'
-        log_vals['data'] = data
-        try:
-            log_msg += '\nResponse data: %(text)s'
-            log_vals['text'] = r.text
-        except (NameError, AttributeError):
-            pass
         if 'TimeoutException' in r.headers:
             raise r.headers['TimeoutException']
+        # This could be anything. Let higher layers handle this
         raise TransportError('Unknown failure\n' + log_msg % log_vals)
     log.debug('Session %(session_id)s thread %(thread_id)s: Useful response from %(url)s', log_vals)
     return r, session
-
-
-def isanysubclass(cls, classinfos):
-    try:
-        iter(classinfos)
-        return any([issubclass(cls, c) for c in classinfos])
-    except TypeError:
-        return issubclass(cls, classinfos)

@@ -13,22 +13,18 @@ import socket
 from multiprocessing.pool import ThreadPool
 from threading import Lock
 
-from future.utils import with_metaclass, python_2_unicode_compatible
 import requests.adapters
 import requests.sessions
-from six import text_type, PY2
+from future.utils import with_metaclass, python_2_unicode_compatible
+from future.moves.queue import LifoQueue, Empty, Full
+from six import text_type
 
 from .credentials import Credentials
 from .errors import TransportError
 from .services import GetServerTimeZones, GetRoomLists, GetRooms
-from .transport import get_auth_instance, get_service_authtype, get_docs_authtype, AUTH_TYPE_MAP, UNKNOWN
+from .transport import get_auth_instance, get_service_authtype, get_docs_authtype, AUTH_TYPE_MAP, DEFAULT_HEADERS
 from .util import split_url
 from .version import Version, API_VERSIONS
-
-if PY2:
-    import Queue as queue
-else:
-    import queue
 
 log = logging.getLogger(__name__)
 
@@ -75,7 +71,7 @@ class BaseProtocol(object):
         while True:
             try:
                 self._session_pool.get(block=False).close_socket(self.service_endpoint)
-            except (queue.Empty, ReferenceError, AttributeError):
+            except (Empty, ReferenceError, AttributeError):
                 break
 
     def get_session(self):
@@ -86,7 +82,7 @@ class BaseProtocol(object):
                 session = self._session_pool.get(timeout=_timeout)
                 log.debug('Server %s: Got session %s', self.server, session.session_id)
                 return session
-            except queue.Empty:
+            except Empty:
                 # This is normal when we have many worker threads starving for available sessions
                 log.debug('Server %s: No sessions available for %s seconds', self.server, _timeout)
 
@@ -95,7 +91,7 @@ class BaseProtocol(object):
         log.debug('Server %s: Releasing session %s', self.server, session.session_id)
         try:
             self._session_pool.put(session, block=False)
-        except queue.Full:
+        except Full:
             log.debug('Server %s: Session pool was already full %s', self.server, session.session_id)
 
     def retire_session(self, session):
@@ -116,8 +112,7 @@ class BaseProtocol(object):
         session = EWSSession(self)
         session.auth = get_auth_instance(credentials=self.credentials, auth_type=self.auth_type)
         # Leave this inside the loop because headers are mutable
-        headers = {'Content-Type': 'text/xml; charset=utf-8', 'Accept-Encoding': 'compress, gzip'}
-        session.headers.update(headers)
+        session.headers.update(DEFAULT_HEADERS.copy())
         scheme = 'https' if self.has_ssl else 'http'
         # We want just one connection per session. No retries, since we wrap all requests in our own retry handler
         session.mount('%s://' % scheme, requests.adapters.HTTPAdapter(
@@ -165,7 +160,7 @@ class CachingProtocol(type):
     @classmethod
     def clear_cache(mcs):
         for key, protocol in mcs._protocol_cache.items():
-            service_endpoint, credentials, verify_ssl = key
+            service_endpoint = key[0]
             log.debug("Service endpoint '%s': Closing sessions", service_endpoint)
             protocol.close()
             del protocol
@@ -190,11 +185,11 @@ class Protocol(with_metaclass(CachingProtocol, BaseProtocol)):
         try:
             self.docs_auth_type = get_docs_authtype(verify=self.verify_ssl, docs_url=self.types_url)
         except TransportError:
-            self.docs_auth_type = UNKNOWN
+            self.docs_auth_type = self.auth_type  # Default to the auth type used by the service
 
         # Try to behave nicely with the Exchange server. We want to keep the connection open between requests.
         # We also want to re-use sessions, to avoid the NTLM auth handshake on every request.
-        self._session_pool = queue.LifoQueue(maxsize=self.SESSION_POOLSIZE)
+        self._session_pool = LifoQueue(maxsize=self.SESSION_POOLSIZE)
         for _ in range(self.SESSION_POOLSIZE):
             self._session_pool.put(self.create_session(), block=False)
 
@@ -217,7 +212,7 @@ class Protocol(with_metaclass(CachingProtocol, BaseProtocol)):
         return GetRoomLists(protocol=self).call()
 
     def get_rooms(self, roomlist):
-        from .folders import RoomList
+        from .properties import RoomList
         return GetRooms(protocol=self).call(roomlist=RoomList(email_address=roomlist))
 
     def __str__(self):
@@ -248,19 +243,9 @@ class EWSSession(requests.sessions.Session):
         # Close underlying socket. This ensures we don't leave stray sockets around after program exit.
         adapter = self.get_adapter(url)
         pool = adapter.get_connection(url)
-        for i in range(pool.pool.qsize()):
+        for _ in range(pool.pool.qsize()):
             conn = pool._get_conn()
             if conn.sock:
                 log.debug('Closing socket %s', text_type(conn.sock.getsockname()))
                 conn.sock.shutdown(socket.SHUT_RDWR)
                 conn.sock.close()
-
-    def __enter__(self):
-        return super(EWSSession, self).__enter__()
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is None:
-            self.protocol.release_session(self)
-        else:
-            self.protocol.retire_session(self)
-        # return super().__exit__()  # We want to close the session socket explicitly

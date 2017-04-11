@@ -3,26 +3,11 @@ from __future__ import unicode_literals
 
 import datetime
 import logging
-import shelve
 
 import pytz
-from future.utils import PY2
 
 from .errors import UnknownTimeZone
 from .winzone import PYTZ_TO_MS_TIMEZONE_MAP
-
-if PY2:
-    from contextlib import contextmanager
-
-    @contextmanager
-    def shelve_open(*args, **kwargs):
-        shelve_handle = shelve.open(*args, **kwargs)
-        try:
-            yield shelve_handle
-        finally:
-            shelve_handle.close()
-else:
-    shelve_open = shelve.open
 
 log = logging.getLogger(__name__)
 
@@ -62,7 +47,8 @@ class EWSDateTime(datetime.datetime):
         """
         ISO 8601 format to satisfy xs:datetime as interpreted by EWS. Example: 2009-01-15T13:45:56Z
         """
-        assert self.tzinfo  # EWS datetimes must always be timezone-aware
+        if not self.tzinfo:
+            raise ValueError('EWSDateTime must be timezone-aware')
         if self.tzinfo.zone == 'UTC':
             return self.strftime('%Y-%m-%dT%H:%M:%SZ')
         return self.strftime('%Y-%m-%dT%H:%M:%S')
@@ -94,7 +80,7 @@ class EWSDateTime(datetime.datetime):
     def from_string(cls, date_string):
         # Assume UTC and return timezone-aware EWSDateTime objects
         local_dt = super(EWSDateTime, cls).strptime(date_string, '%Y-%m-%dT%H:%M:%SZ')
-        return EWSTimeZone.from_pytz(pytz.utc).localize(cls.from_datetime(local_dt))
+        return UTC.localize(cls.from_datetime(local_dt))
 
     @classmethod
     def now(cls, tz=None):

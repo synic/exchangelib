@@ -18,6 +18,7 @@ import tempfile
 from threading import Lock
 
 import dns.resolver
+from future.moves.queue import LifoQueue
 import requests.exceptions
 from future.utils import raise_from, PY2, python_2_unicode_compatible
 from six import text_type
@@ -27,13 +28,10 @@ from .credentials import Credentials
 from .errors import AutoDiscoverFailed, AutoDiscoverRedirect, AutoDiscoverCircularRedirect, TransportError, \
     RedirectError, ErrorNonExistentMailbox, UnauthorizedError
 from .protocol import BaseProtocol, Protocol
+from .transport import DEFAULT_ENCODING, DEFAULT_HEADERS
 from .util import create_element, get_xml_attr, add_xml_child, to_xml, is_xml, post_ratelimited, xml_to_str, \
     get_domain, CONNECTION_ERRORS
 
-if PY2:
-    import Queue as queue
-else:
-    import queue
 
 log = logging.getLogger(__name__)
 
@@ -84,9 +82,6 @@ class AutodiscoverCache(object):
     def _storage_file(self):
         return AUTODISCOVER_PERSISTENT_STORAGE
 
-    def items(self):
-        return self._protocols.items()
-
     def clear(self):
         # Wipe the entire cache
         with shelve_open(self._storage_file) as db:
@@ -94,7 +89,7 @@ class AutodiscoverCache(object):
         self._protocols.clear()
 
     def __contains__(self, key):
-        domain, credentials, verify_ssl = key
+        domain = key[0]
         with shelve_open(self._storage_file) as db:
             return str(domain) in db
 
@@ -112,7 +107,7 @@ class AutodiscoverCache(object):
 
     def __setitem__(self, key, protocol):
         # Populate both local and persistent cache
-        domain, credentials, verify_ssl = key
+        domain = key[0]
         with shelve_open(self._storage_file) as db:
             db[str(domain)] = (protocol.service_endpoint, protocol.auth_type)
         self._protocols[key] = protocol
@@ -120,7 +115,7 @@ class AutodiscoverCache(object):
     def __delitem__(self, key):
         # Empty both local and persistent cache. Don't fail on non-existing entries because we could end here
         # multiple times due to race conditions.
-        domain, credentials, verify_ssl = key
+        domain = key[0]
         with shelve_open(self._storage_file) as db:
             try:
                 del db[str(domain)]
@@ -192,13 +187,7 @@ def discover(email, credentials, verify_ssl=True):
             if email.lower() == e.redirect_email.lower():
                 raise_from(AutoDiscoverCircularRedirect('Redirect to same email address: %s' % email), e)
             # Start over with the new email address
-            try:
-                return discover(email=e.redirect_email, credentials=credentials, verify_ssl=verify_ssl)
-            except AutoDiscoverFailed:
-                # Autodiscover no longer works with this domain. Clear cache and try again
-                del _autodiscover_cache[autodiscover_key]
-                return discover(email=e.redirect_email, credentials=credentials, verify_ssl=verify_ssl)
-        # This is unreachable
+            return discover(email=e.redirect_email, credentials=credentials, verify_ssl=verify_ssl)
 
     log.debug('Waiting for _autodiscover_cache_lock')
     with _autodiscover_cache_lock:
@@ -258,54 +247,52 @@ def _try_autodiscover(hostname, credentials, email, verify):
                     return _try_autodiscover(hostname=hostname_from_dns, credentials=credentials, email=email,
                                              verify=verify)
                 except AutoDiscoverFailed:
-                    hostname_from_dns = _get_hostname_from_srv(hostname='_autodiscover._tcp.%s' % hostname)
                     # Start over with new hostname
                     try:
+                        hostname_from_dns = _get_hostname_from_srv(hostname='_autodiscover._tcp.%s' % hostname)
                         return _try_autodiscover(hostname=hostname_from_dns, credentials=credentials, email=email,
                                                  verify=verify)
                     except AutoDiscoverFailed:
                         raise AutoDiscoverFailed('All steps in the autodiscover protocol failed')
 
 
-def _autodiscover_hostname(hostname, credentials, email, has_ssl, verify, auth_type=None):
+def _autodiscover_hostname(hostname, credentials, email, has_ssl, verify):
     # Tries to get autodiscover data on a specific host. If we are HTTP redirected, we restart the autodiscover dance on
     # the new host.
-    scheme = 'https' if has_ssl else 'http'
-    url = '%s://%s/Autodiscover/Autodiscover.xml' % (scheme, hostname)
+    url = '%s://%s/Autodiscover/Autodiscover.xml' % ('https' if has_ssl else 'http', hostname)
     log.debug('Trying autodiscover on %s', url)
-    if not auth_type:
-        try:
-            auth_type = _get_autodiscover_auth_type(url=url, verify=verify, email=email)
-        except RedirectError as e:
-            log.debug(e)
-            redirect_url, redirect_hostname, redirect_has_ssl = e.url, e.server, e.has_ssl
-            log.debug('We were redirected to %s', redirect_url)
-            canonical_hostname = _get_canonical_name(redirect_hostname)
-            if canonical_hostname:
-                log.debug('Canonical hostname is %s', canonical_hostname)
-                redirect_hostname = canonical_hostname
-            # Try the process on the new host, without 'www'. This is beyond the autodiscover protocol and an attempt to
-            # work around seriously misconfigured Exchange servers. It's probably better to just show the Exchange
-            # admins the report from https://testconnectivity.microsoft.com
-            if redirect_hostname.startswith('www.'):
-                redirect_hostname = redirect_hostname[4:]
-            if redirect_hostname == hostname:
-                log.debug('We were redirected to the same host')
-                raise_from(AutoDiscoverFailed('We were redirected to the same host'), e)
-            raise_from(RedirectError(url='%s://%s' % ('https' if redirect_has_ssl else 'http', redirect_hostname)), e)
+    auth_type = None
+    try:
+        auth_type = _get_autodiscover_auth_type(url=url, verify=verify, email=email)
+    except RedirectError as e:
+        redirect_url, redirect_hostname, redirect_has_ssl = e.url, e.server, e.has_ssl
+        log.debug('We were redirected to %s', redirect_url)
+        canonical_hostname = _get_canonical_name(redirect_hostname)
+        if canonical_hostname:
+            log.debug('Canonical hostname is %s', canonical_hostname)
+            redirect_hostname = canonical_hostname
+        # Try the process on the new host, without 'www'. This is beyond the autodiscover protocol and an attempt to
+        # work around seriously misconfigured Exchange servers. It's probably better to just show the Exchange
+        # admins the report from https://testconnectivity.microsoft.com
+        if redirect_hostname.startswith('www.'):
+            redirect_hostname = redirect_hostname[4:]
+        if redirect_hostname == hostname:
+            log.debug('We were redirected to the same host')
+            raise_from(AutoDiscoverFailed('We were redirected to the same host'), e)
+        raise_from(RedirectError(url='%s://%s' % ('https' if redirect_has_ssl else 'http', redirect_hostname)), e)
 
     autodiscover_protocol = AutodiscoverProtocol(service_endpoint=url, credentials=credentials, auth_type=auth_type,
                                                  verify_ssl=verify)
     r = _get_autodiscover_response(protocol=autodiscover_protocol, email=email)
     domain = get_domain(email)
     try:
-        server, has_ssl, ews_url, ews_auth_type, primary_smtp_address = _parse_response(r.text)
+        ews_url, primary_smtp_address = _parse_response(r.text)
         if not primary_smtp_address:
             primary_smtp_address = email
     except (ErrorNonExistentMailbox, AutoDiscoverRedirect):
         # These are both valid responses from an autodiscover server, showing that we have found the correct
         # server for the original domain. Fill cache before re-raising
-        log.debug('Adding cache entry for %s (hostname %s, has_ssl %s)', domain, hostname, has_ssl)
+        log.debug('Adding cache entry for %s (hostname %s)', domain, hostname)
         _autodiscover_cache[(domain, credentials, verify)] = autodiscover_protocol
         raise
 
@@ -322,7 +309,7 @@ def _autodiscover_hostname(hostname, credentials, email, has_ssl, verify, auth_t
 
 def _autodiscover_quick(credentials, email, protocol):
     r = _get_autodiscover_response(protocol=protocol, email=email)
-    server, has_ssl, ews_url, ews_auth_type, primary_smtp_address = _parse_response(r.text)
+    ews_url, primary_smtp_address = _parse_response(r.text)
     if not primary_smtp_address:
         primary_smtp_address = email
     log.debug('Autodiscover success: %s may connect to %s as primary email %s', email, ews_url, primary_smtp_address)
@@ -334,9 +321,9 @@ def _autodiscover_quick(credentials, email, protocol):
                                           verify_ssl=protocol.verify_ssl)
 
 
-def _get_autodiscover_auth_type(url, email, verify, encoding='utf-8'):
+def _get_autodiscover_auth_type(url, email, verify):
     try:
-        data = _get_autodiscover_payload(email=email, encoding=encoding)
+        data = _get_autodiscover_payload(email=email)
         return transport.get_autodiscover_authtype(service_endpoint=url, data=data, timeout=TIMEOUT,
                                                    verify=verify)
     except TransportError as e:
@@ -349,27 +336,26 @@ def _get_autodiscover_auth_type(url, email, verify, encoding='utf-8'):
         raise_from(AutoDiscoverFailed('Error guessing auth type: %s' % e), e)
 
 
-def _get_autodiscover_payload(email, encoding='utf-8'):
+def _get_autodiscover_payload(email):
     # Builds a full Autodiscover XML request
     payload = create_element('Autodiscover', xmlns=REQUEST_NS)
     request = create_element('Request')
     add_xml_child(request, 'EMailAddress', email)
     add_xml_child(request, 'AcceptableResponseSchema', RESPONSE_NS)
     payload.append(request)
-    return xml_to_str(payload, encoding=encoding, xml_declaration=True)
+    return xml_to_str(payload, encoding=DEFAULT_ENCODING, xml_declaration=True)
 
 
-def _get_autodiscover_response(protocol, email, encoding='utf-8'):
-    data = _get_autodiscover_payload(email=email, encoding=encoding)
-    headers = {'Content-Type': 'text/xml; charset=%s' % encoding}
+def _get_autodiscover_response(protocol, email):
+    data = _get_autodiscover_payload(email=email)
     try:
         # Rate-limiting is an issue with autodiscover if the same setup is hosting EWS and autodiscover and we just
         # hammered the server with requests. We allow redirects since some autodiscover servers will issue different
         # redirects depending on the POST data content.
         session = protocol.get_session()
         r, session = post_ratelimited(protocol=protocol, session=session, url=protocol.service_endpoint,
-                                      headers=headers, data=data, timeout=protocol.TIMEOUT, verify=protocol.verify_ssl,
-                                      allow_redirects=True)
+                                      headers=DEFAULT_HEADERS.copy(), data=data, timeout=protocol.TIMEOUT,
+                                      verify=protocol.verify_ssl, allow_redirects=True)
         protocol.release_session(session)
         log.debug('Response headers: %s', r.headers)
     except RedirectError:
@@ -384,30 +370,39 @@ def _get_autodiscover_response(protocol, email, encoding='utf-8'):
     return r
 
 
-def _parse_response(response, encoding='utf-8'):
-    # We could return lots more interesting things here
-    autodiscover = to_xml(response, encoding=encoding)
-    resp = autodiscover.find('{%s}Response' % RESPONSE_NS)
-    if resp is None:
-        resp = autodiscover.find('{%s}Response' % ERROR_NS)
+def _raise_response_errors(elem):
+    # Find an error message in the response and raise the relevant exception
+    try:
+        resp = elem.find('{%s}Response' % ERROR_NS)
         error = resp.find('{%s}Error' % ERROR_NS)
         errorcode = get_xml_attr(error, '{%s}ErrorCode' % ERROR_NS)
         message = get_xml_attr(error, '{%s}Message' % ERROR_NS)
         if message in ('The e-mail address cannot be found.', "The email address can't be found."):
             raise ErrorNonExistentMailbox('The SMTP address has no mailbox associated with it')
         raise AutoDiscoverFailed('Unknown error %s: %s' % (errorcode, message))
+    except AttributeError:
+        raise AutoDiscoverFailed('Unknown autodiscover response: %s' % xml_to_str(elem))
+
+
+def _parse_response(response):
+    # We could return lots more interesting things here
+    if not is_xml(response):
+        raise AutoDiscoverFailed('Unknown autodiscover response: %s' % response)
+    autodiscover = to_xml(response)
+    resp = autodiscover.find('{%s}Response' % RESPONSE_NS)
+    if resp is None:
+        _raise_response_errors(autodiscover)
     account = resp.find('{%s}Account' % RESPONSE_NS)
+    assert get_xml_attr(account, '{%s}AccountType' % RESPONSE_NS) == 'email'
     action = get_xml_attr(account, '{%s}Action' % RESPONSE_NS)
     redirect_email = get_xml_attr(account, '{%s}RedirectAddr' % RESPONSE_NS)
     if action == 'redirectAddr' and redirect_email:
         # This is redirection to e.g. Office365
         raise AutoDiscoverRedirect(redirect_email)
-    user = resp.find('{%s}User' % RESPONSE_NS)
     # AutoDiscoverSMTPAddress might not be present in the XML, so primary_smtp_address might be None. In this
     # case, the original email address IS the primary address
+    user = resp.find('{%s}User' % RESPONSE_NS)
     primary_smtp_address = get_xml_attr(user, '{%s}AutoDiscoverSMTPAddress' % RESPONSE_NS)
-    account_type = get_xml_attr(account, '{%s}AccountType' % RESPONSE_NS)
-    assert account_type == 'email'
     protocols = {get_xml_attr(p, '{%s}Type' % RESPONSE_NS): p for p in account.findall('{%s}Protocol' % RESPONSE_NS)}
     # There are three possible protocol types: EXCH, EXPR and WEB.
     # EXPR is meant for EWS. See http://blogs.technet.com/b/exchange/archive/2008/09/26/3406344.aspx
@@ -419,28 +414,12 @@ def _parse_response(response, encoding='utf-8'):
             protocol = protocols['EXCH']
         except KeyError:
             # Neither type was found. Give up
-            raise AutoDiscoverFailed('Invalid AutoDiscover response: %s' % response)
+            raise AutoDiscoverFailed('Invalid AutoDiscover response: %s' % xml_to_str(autodiscover))
 
-    server = get_xml_attr(protocol, '{%s}Server' % RESPONSE_NS)
-    has_ssl = True if get_xml_attr(protocol, '{%s}SSL' % RESPONSE_NS) == 'On' else False
     ews_url = get_xml_attr(protocol, '{%s}EwsUrl' % RESPONSE_NS)
-    auth_package = get_xml_attr(protocol, '{%s}AuthPackage' % RESPONSE_NS)
-    try:
-        ews_auth_type = {
-            'ntlm': transport.NTLM,
-            'basic': transport.BASIC,
-            'digest': transport.DIGEST,
-            None: transport.NOAUTH,
-        }[auth_package.lower() if auth_package else None]
-    except KeyError:
-        log.warning("Unknown auth package '%s'")
-        ews_auth_type = transport.UNKNOWN
-    log.debug('Primary SMTP: %s, EWS endpoint: %s, auth type: %s', primary_smtp_address, ews_url, ews_auth_type)
-    assert server
-    assert has_ssl in (True, False)
-    assert ews_url
-    assert ews_auth_type
-    return server, has_ssl, ews_url, ews_auth_type, primary_smtp_address
+    log.debug('Primary SMTP: %s, EWS endpoint: %s', primary_smtp_address, ews_url)
+    assert ews_url and primary_smtp_address
+    return ews_url, primary_smtp_address
 
 
 def _get_canonical_name(hostname):
@@ -459,10 +438,11 @@ def _get_canonical_name(hostname):
 
 
 def _get_hostname_from_srv(hostname):
-    # May return e.g.:
+    # An SRV entry may contain e.g.:
     #   canonical name = mail.ucl.dk.
     #   service = 8 100 443 webmail.ucn.dk.
     # or throw dns.resolver.NoAnswer
+    # The first three numbers in the service line are priority, weight, port
     log.debug('Attempting to get SRV record on %s', hostname)
     resolver = dns.resolver.Resolver()
     resolver.timeout = TIMEOUT
@@ -471,7 +451,8 @@ def _get_hostname_from_srv(hostname):
         for rdata in answers:
             try:
                 vals = rdata.to_text().strip().rstrip('.').split(' ')
-                priority, weight, port, svr = int(vals[0]), int(vals[1]), int(vals[2]), vals[3]
+                int(vals[0]), int(vals[1]), int(vals[2])  # Just to raise errors if these are not ints
+                svr = vals[3]
             except (ValueError, KeyError) as e:
                 raise_from(AutoDiscoverFailed('Incompatible SRV record for %s (%s)' % (hostname, rdata.to_text())), e)
             else:
@@ -491,7 +472,7 @@ class AutodiscoverProtocol(BaseProtocol):
 
     def __init__(self, *args, **kwargs):
         super(AutodiscoverProtocol, self).__init__(*args, **kwargs)
-        self._session_pool = queue.LifoQueue(maxsize=self.SESSION_POOLSIZE)
+        self._session_pool = LifoQueue(maxsize=self.SESSION_POOLSIZE)
         for _ in range(self.SESSION_POOLSIZE):
             self._session_pool.put(self.create_session(), block=False)
 

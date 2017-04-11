@@ -8,7 +8,8 @@ import time
 
 from yaml import load
 
-from exchangelib import DELEGATE, services, Credentials, Configuration, Account, EWSDateTime, EWSTimeZone, CalendarItem
+from exchangelib import DELEGATE, services, ServiceAccount, Configuration, Account, EWSDateTime, EWSTimeZone, \
+    CalendarItem
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -23,7 +24,7 @@ categories = ['perftest']
 tz = EWSTimeZone.timezone('America/New_York')
 
 config = Configuration(server=settings['server'],
-                       credentials=Credentials(settings['username'], settings['password'], is_service_account=True),
+                       credentials=ServiceAccount(settings['username'], settings['password']),
                        verify_ssl=settings['verify_ssl'])
 print('Exchange server: %s' % config.protocol.server)
 
@@ -31,6 +32,7 @@ account = Account(config=config, primary_smtp_address=settings['account'], acces
 
 # Remove leftovers from earlier tests
 account.calendar.filter(categories__contains=categories).delete()
+
 
 # Calendar item generator
 def generate_items(n):
@@ -44,9 +46,9 @@ def generate_items(n):
         location="It's safe to delete this",
         categories=categories,
     )
-    for i in range(n):
+    for j in range(n):
         item = copy.copy(tpl_item)
-        item.subject='Performance optimization test %s by exchangelib' % i,
+        item.subject = 'Performance optimization test %s by exchangelib' % j,
         yield item
 
 

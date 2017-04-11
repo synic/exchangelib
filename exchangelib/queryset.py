@@ -10,7 +10,6 @@ from future.utils import python_2_unicode_compatible
 from six import string_types
 
 from .restriction import Q
-from .services import IdOnly
 
 log = logging.getLogger(__name__)
 
@@ -23,11 +22,26 @@ class DoesNotExist(Exception):
     pass
 
 
+def split_fieldname(fieldname):
+    search_parts = fieldname.lstrip('-').split('__')
+    field = search_parts[0]
+    try:
+        label = search_parts[1]
+    except IndexError:
+        label = None
+    try:
+        subfield = search_parts[2]
+    except IndexError:
+        subfield = None
+    reverse = fieldname.startswith('-')
+    return field, label, subfield, reverse
+
+
 class OrderField(object):
     """ Holds values needed to call server-side sorting on a single field """
     def __init__(self, field, label=None, subfield=None, reverse=False):
         # 'label' and 'subfield' are only used for IndexedField fields, and 'subfield' only for the fields that have
-        # multiple subfields (see IndexedField.SUB_FIELD_ELEMENT_NAMES).
+        # multiple subfields (MultiFieldIndexedField).
         self.field = field
         self.label = label
         self.subfield = subfield
@@ -35,34 +49,34 @@ class OrderField(object):
 
     @classmethod
     def from_string(cls, s, folder):
-        from .folders import IndexedField
-
-        search_parts = s.lstrip('-').split('__')
-        field = search_parts[0]
-        try:
-            label = search_parts[1]
-        except IndexError:
-            label = None
-        try:
-            subfield = search_parts[2]
-        except IndexError:
-            subfield = None
-        reverse = s.startswith('-')
-        field_uri = folder.fielduri_for_field(field)
-        if not isinstance(field_uri, string_types) and issubclass(field_uri, IndexedField):
+        from .fields import IndexedField
+        from .indexed_properties import SingleFieldIndexedElement, MultiFieldIndexedElement
+        fieldname, label, subfield, reverse = split_fieldname(s)
+        field = folder.get_item_field_by_fieldname(fieldname)
+        if isinstance(field, IndexedField):
             if not label:
                 raise ValueError(
-                    "IndexedField order_by() value '%s' must specify label, e.g. 'email_addresses__EmailAddress1'" % s)
-            if field_uri.SUB_FIELD_ELEMENT_NAMES and not subfield:
-                raise ValueError("IndexedField order_by() value '%s' must specify subfield, e.g. "
-                                 "'physical_addresses__Business__zipcode'" % s)
-            if not field_uri.SUB_FIELD_ELEMENT_NAMES and subfield:
-                raise ValueError("IndexedField order_by() value '%s' must not specify subfield, e.g. just "
-                                 "'email_addresses__EmailAddress1'" % s)
+                    "IndexedField order_by() value '%s' must specify label, e.g. '%s__%s'" % (
+                        s, fieldname, field.value_cls.LABEL_FIELD.default))
+            valid_labels = field.value_cls.LABEL_FIELD.supported_choices(version=folder.account.version)
+            if label not in valid_labels:
+                raise ValueError(
+                    "Label '%s' on IndexedField order_by() value '%s' must be one of %s" % (
+                        label, s, ', '.join(valid_labels)))
+            if issubclass(field.value_cls, MultiFieldIndexedElement):
+                if not subfield:
+                    raise ValueError("IndexedField order_by() value '%s' must specify subfield, e.g. %s__%s__%s" % (
+                        s, fieldname, label, field.value_cls.FIELDS[0].name))
+                try:
+                    subfield = field.value_cls.get_field_by_fieldname(subfield)
+                except ValueError:
+                    fnames = ', '.join(f.name for f in field.value_cls.supported_fields(version=folder.account.version))
+                    raise ValueError(
+                        "Subfield '%s' on IndexedField order_by() value '%s' must be one of %s" % (subfield, s, fnames))
+            if issubclass(field.value_cls, SingleFieldIndexedElement) and subfield:
+                raise ValueError("IndexedField order_by() value '%s' must not specify subfield, e.g. just %s__%s" % (
+                    s, fieldname, label))
         return cls(field=field, label=label, subfield=subfield, reverse=reverse)
-
-    def __repr__(self):
-        return self.__class__.__name__ + repr((self.field, self.label, self.subfield, self.reverse))
 
 
 @python_2_unicode_compatible
@@ -114,22 +128,25 @@ class QuerySet(object):
         return new_qs
 
     def _check_fields(self, field_names):
-        allowed_field_names = set(self.folder.allowed_field_names()) | {'item_id', 'changekey'}
+        fields = []
         for f in field_names:
             if not isinstance(f, string_types):
                 raise ValueError("Fieldname '%s' must be a string" % f)
-            if f not in allowed_field_names:
-                raise ValueError("Unknown fieldname '%s'" % f)
+            field_name = split_fieldname(f)[0]
+            field = self.folder.get_item_field_by_fieldname(field_name)
+            fields.append(field)
+        return tuple(fields)
 
     def _query(self):
         if self.only_fields is None:
-            # The list of fields was not restricted. Get all fields we support, as a set
-            additional_fields = self.folder.allowed_field_names()
+            # The list of fields was not restricted. Get all fields we support, as a set, but remove ItemId and
+            # ChangeKey. We get them unconditionally.
+            additional_fields = {f for f in self.folder.allowed_fields()}
         else:
             assert isinstance(self.only_fields, tuple)
             # Remove ItemId and ChangeKey. We get them unconditionally
-            additional_fields = {f for f in self.only_fields if f not in {'item_id', 'changekey'}}
-        complex_fields_requested = bool(additional_fields & self.folder.complex_field_names())
+            additional_fields = {f for f in self.only_fields if f.name not in {'item_id', 'changekey'}}
+        complex_fields_requested = bool(additional_fields & self.folder.complex_fields())
 
         # EWS can do server-side sorting on at most one field. If we have multiple order_by fields, we can let the
         # server sort on the last field in the list. Python sorting is stable, so we can do multiple-field sort by
@@ -159,7 +176,6 @@ class QuerySet(object):
 
         find_item_kwargs = dict(
             additional_fields=None,
-            shape=IdOnly,
             order=order_field,
             calendar_view=self.calendar_view,
             page_size=self.page_size,
@@ -195,14 +211,14 @@ class QuerySet(object):
         # Sorting in Python is stable, so when we search on multiple fields, we can do a sort on each of the requested
         # fields in reverse order. Reverse each sort operation if the field was prefixed with '-'.
         for f in reversed(clientside_sort_fields):
-            items = sorted(items, key=attrgetter(f.field), reverse=f.reverse)
+            items = sorted(items, key=attrgetter(f.field.name), reverse=f.reverse)
         if not extra_order_fields:
             return items
 
         # Nullify the fields we only needed for sorting
         def clean_item(i):
             for f in extra_order_fields:
-                setattr(i, f, None)
+                setattr(i, f.name, None)
             return i
         return (clean_item(i) for i in items)
 
@@ -217,16 +233,16 @@ class QuerySet(object):
                 yield val
             return
 
-        log.debug('Initializing cache')
         if self.q is None:
             self._cache = []
             return
 
+        log.debug('Initializing cache')
         _cache = []
         result_formatter = {
-            self.VALUES: self.as_values,
-            self.VALUES_LIST: self.as_values_list,
-            self.FLAT: self.as_flat_values_list,
+            self.VALUES: self._as_values,
+            self.VALUES_LIST: self._as_values_list,
+            self.FLAT: self._as_flat_values_list,
             self.NONE: lambda res_iter: res_iter,
         }[self.return_format]
         for val in result_formatter(self._query()):
@@ -250,12 +266,12 @@ class QuerySet(object):
     def _getitem_idx(self, idx):
         from .services import FindItem
         assert isinstance(idx, int)
+        if self._cache is not None:
+            return self._cache[idx]
         if idx < 0:
             # Support negative indexes by reversing the queryset and negating the index value
-            if self._cache is not None:
-                return self._cache[idx]
             reverse_idx = -(idx+1)
-            return self.reverse()[reverse_idx]
+            return self.reverse()._getitem_idx(reverse_idx)
         else:
             if self._cache is None and idx < FindItem.CHUNKSIZE:
                 # Optimize a bit by setting self.page_size to only get as many items as strictly needed
@@ -279,16 +295,16 @@ class QuerySet(object):
             self.page_size = s.stop
         return islice(self.__iter__(), s.start, s.stop, s.step)
 
-    def as_values(self, iterable):
-        if len(self.only_fields) == 0:
-            raise ValueError('values() requires at least one field name')
-        additional_fields = tuple(f for f in self.only_fields if f not in {'item_id', 'changekey'})
-        if not additional_fields and not self.order_fields:
+    def _as_values(self, iterable):
+        assert self.only_fields, 'values() requires at least one field name'
+        only_field_names = {f.name for f in self.only_fields}
+        has_additional_fields = bool(only_field_names - {'item_id', 'changekey'})
+        if not has_additional_fields:
             # _query() will return an iterator of (item_id, changekey) tuples
-            if 'changekey' not in self.only_fields:
+            if 'changekey' not in only_field_names:
                 for item_id, changekey in iterable:
                     yield {'item_id': item_id}
-            elif 'item_id' not in self.only_fields:
+            elif 'item_id' not in only_field_names:
                 for item_id, changekey in iterable:
                     yield {'changekey': changekey}
             else:
@@ -296,19 +312,18 @@ class QuerySet(object):
                     yield {'item_id': item_id, 'changekey': changekey}
             return
         for i in iterable:
-            yield {k: getattr(i, k) for k in self.only_fields}
+            yield {k: getattr(i, k) for k in only_field_names}
 
-    def as_values_list(self, iterable):
-        if len(self.only_fields) == 0:
-            raise ValueError('values_list() requires at least one field name')
-        additional_fields = tuple(f for f in self.only_fields if f not in {'item_id', 'changekey'})
-
-        if not additional_fields and not self.order_fields:
+    def _as_values_list(self, iterable):
+        assert self.only_fields, 'values_list() requires at least one field name'
+        only_field_names = {f.name for f in self.only_fields}
+        has_additional_fields = bool(only_field_names - {'item_id', 'changekey'})
+        if not has_additional_fields:
             # _query() will return an iterator of (item_id, changekey) tuples
-            if 'changekey' not in self.only_fields:
+            if 'changekey' not in only_field_names:
                 for item_id, changekey in iterable:
                     yield (item_id,)
-            elif 'item_id' not in self.only_fields:
+            elif 'item_id' not in only_field_names:
                 for item_id, changekey in iterable:
                     yield (changekey,)
             else:
@@ -316,26 +331,23 @@ class QuerySet(object):
                     yield (item_id, changekey)
             return
         for i in iterable:
-            yield tuple(getattr(i, f) for f in self.only_fields)
+            yield tuple(getattr(i, f) for f in only_field_names)
 
-    def as_flat_values_list(self, iterable):
-        if len(self.only_fields) != 1:
-            raise ValueError('flat=True requires exactly one field name')
-        additional_fields = tuple(f for f in self.only_fields if f not in {'item_id', 'changekey'})
-
-        if not additional_fields and not self.order_fields:
+    def _as_flat_values_list(self, iterable):
+        assert self.only_fields and len(self.only_fields) == 1, 'flat=True requires exactly one field name'
+        flat_field_name = self.only_fields[0].name
+        if flat_field_name == 'item_id':
             # _query() will return an iterator of (item_id, changekey) tuples
-            if 'item_id' in self.only_fields:
-                for item_id, changekey in iterable:
-                    yield item_id
-            elif 'changekey' in self.only_fields:
-                for item_id, changekey in iterable:
-                    yield changekey
-            else:
-                assert False
+            for item_id, changekey in iterable:
+                yield item_id
+            return
+        if flat_field_name == 'changekey':
+            # _query() will return an iterator of (item_id, changekey) tuples
+            for item_id, changekey in iterable:
+                yield changekey
             return
         for i in iterable:
-            yield getattr(i, self.only_fields[0])
+            yield getattr(i, flat_field_name)
 
     ###############################
     #
@@ -354,46 +366,46 @@ class QuerySet(object):
         return new_qs
 
     def none(self):
-        """ Return a query that is quaranteed to be empty  """
+        """ Return a query that is guaranteed to be empty  """
         new_qs = self.copy()
         new_qs.q = None
+        new_qs._cache = None
         return new_qs
 
     def filter(self, *args, **kwargs):
         """ Return everything that matches these search criteria """
         new_qs = self.copy()
-        q = Q.from_filter_args(self.folder.__class__, *args, **kwargs) or Q()
+        q = Q(*args, **kwargs) or Q()
         new_qs.q = q if new_qs.q is None else new_qs.q & q
         return new_qs
 
     def exclude(self, *args, **kwargs):
         """ Return everything that does NOT match these search criteria """
         new_qs = self.copy()
-        q = ~Q.from_filter_args(self.folder.__class__, *args, **kwargs) or Q()
+        q = ~Q(*args, **kwargs) or Q()
         new_qs.q = q if new_qs.q is None else new_qs.q & q
         return new_qs
 
     def only(self, *args):
         """ Fetch only the specified field names. All other item fields will be 'None' """
         try:
-            self._check_fields(args)
+            only_fields = self._check_fields(args)
         except ValueError as e:
             raise ValueError("%s in only()" % e.args[0])
         new_qs = self.copy()
-        new_qs.only_fields = args
+        new_qs.only_fields = only_fields
         return new_qs
 
     def order_by(self, *args):
         """ Return the query result sorted by the specified field names. Field names prefixed with '-' will be sorted
         in reverse order. EWS only supports server-side sorting on a single field. Sorting on multiple fields is
         implemented client-side and will therefore make the query greedy """
-        order_fields = tuple(OrderField.from_string(arg, folder=self.folder) for arg in args)
         try:
-            self._check_fields(f.field for f in order_fields)
+            self._check_fields(args)
         except ValueError as e:
             raise ValueError("%s in order_by()" % e.args[0])
         new_qs = self.copy()
-        new_qs.order_fields = order_fields
+        new_qs.order_fields = tuple(OrderField.from_string(arg, folder=self.folder) for arg in args)
         return new_qs
 
     def reverse(self):
@@ -408,11 +420,11 @@ class QuerySet(object):
     def values(self, *args):
         """ Return the values of the specified field names as dicts """
         try:
-            self._check_fields(args)
+            only_fields = self._check_fields(args)
         except ValueError as e:
             raise ValueError("%s in values()" % e.args[0])
         new_qs = self.copy()
-        new_qs.only_fields = args
+        new_qs.only_fields = only_fields
         new_qs.return_format = self.VALUES
         return new_qs
 
@@ -424,12 +436,14 @@ class QuerySet(object):
         flat = kwargs.pop('flat', False)
         if kwargs:
             raise AttributeError('Unknown kwargs: %s' % kwargs)
+        if flat and len(args) != 1:
+            raise ValueError('flat=True requires exactly one field name')
         try:
-            self._check_fields(args)
+            only_fields = self._check_fields(args)
         except ValueError as e:
             raise ValueError("%s in values_list()" % e.args[0])
         new_qs = self.copy()
-        new_qs.only_fields = args
+        new_qs.only_fields = only_fields
         new_qs.return_format = self.FLAT if flat else self.VALUES_LIST
         return new_qs
 
@@ -441,6 +455,8 @@ class QuerySet(object):
     def iterator(self, page_size=None):
         """ Return the query result as an iterator, without caching the result. 'page_size' is the number of items to
         fetch from the server per request. """
+        if self.q is None:
+            return []
         if self._cache is not None:
             return self._cache
         # Return an iterator that doesn't bother with caching
@@ -461,14 +477,16 @@ class QuerySet(object):
             raise MultipleObjectsReturned()
         return items[0]
 
-    def count(self):
-        """ Get the query count, with as little effort as possible """
+    def count(self, page_size=1000):
+        """ Get the query count, with as little effort as possible 'page_size' is the number of items to
+        fetch from the server per request. We're only fetching the IDs, so keep it high"""
         if self._cache is not None:
             return len(self._cache)
         new_qs = self.copy()
         new_qs.only_fields = tuple()
         new_qs.order_fields = None
         new_qs.return_format = self.NONE
+        new_qs.page_size = page_size
         return len(list(new_qs.__iter__()))
 
     def exists(self):
@@ -477,9 +495,11 @@ class QuerySet(object):
 
     def delete(self):
         """ Delete the items matching the query, with as little effort as possible """
-        from .folders import ALL_OCCURRENCIES
+        from .items import ALL_OCCURRENCIES
         if self._cache is not None:
-            return self.folder.account.bulk_delete(ids=self._cache, affected_task_occurrences=ALL_OCCURRENCIES)
+            res = self.folder.account.bulk_delete(ids=self._cache, affected_task_occurrences=ALL_OCCURRENCIES)
+            self._cache = None  # Invalidate the cache after delete, regardless of the results
+            return res
         new_qs = self.copy()
         new_qs.only_fields = tuple()
         new_qs.order_fields = None

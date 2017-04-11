@@ -82,15 +82,19 @@ class Build(object):
 
     @classmethod
     def from_xml(cls, elem):
-        keys = 'MajorVersion', 'MinorVersion', 'MajorBuildNumber', 'MinorBuildNumber'
-        vals = []
-        for k in keys:
-            v = elem.get(k)
+        xml_elems_map = {
+            'major_version': 'MajorVersion',
+            'minor_version': 'MinorVersion',
+            'major_build': 'MajorBuildNumber',
+            'minor_build': 'MinorBuildNumber',
+        }
+        kwargs = {}
+        for k, xml_elem in xml_elems_map.items():
+            v = elem.get(xml_elem)
             if v is None:
                 raise ValueError()
-            vals.append(int(v))  # Also raises ValueError
-        elem.clear()
-        return cls(*vals)
+            kwargs[k] = int(v)  # Also raises ValueError
+        return cls(**kwargs)
 
     def api_version(self):
         if self.major_version == 15 and self.minor_version == 0 and self.major_build >= 847:
@@ -140,6 +144,7 @@ class Build(object):
 EXCHANGE_2007 = Build(8, 0)
 EXCHANGE_2010 = Build(14, 0)
 EXCHANGE_2013 = Build(15, 0)
+EXCHANGE_2016 = Build(15, 1)
 
 
 @python_2_unicode_compatible
@@ -147,10 +152,13 @@ class Version(object):
     """
     Holds information about the server version
     """
+    __slots__ = ('build', 'api_version')
 
-    def __init__(self, build, api_version):
+    def __init__(self, build, api_version=None):
         self.build = build
         self.api_version = api_version
+        if self.build is not None and self.api_version is None:
+            self.api_version = build.api_version()
 
     @property
     def fullname(self):
@@ -203,7 +211,7 @@ class Version(object):
                 types_url,
                 '\n\n%s[...]' % r.text[:200] if len(r.text) > 200 else '\n\n%s' % r.text if r.text else '',
             ))
-        return to_xml(r.text, encoding=r.encoding).get('version')
+        return to_xml(r.text).get('version')
 
     @classmethod
     def _guess_version_from_service(cls, protocol, hint=None):
@@ -221,19 +229,19 @@ class Version(object):
     @classmethod
     def from_response(cls, requested_api_version, response):
         try:
-            header = to_xml(response.text, encoding=response.encoding).find('{%s}Header' % SOAPNS)
+            header = to_xml(response).find('{%s}Header' % SOAPNS)
             if header is None:
                 raise ParseError()
         except ParseError:
-            raise EWSWarning('Unknown XML response from %s (response: %s)' % (response, response.text))
+            raise TransportError('Unknown XML response (%s)' % response)
 
         info = header.find('{%s}ServerVersionInfo' % TNS)
         if info is None:
-            raise TransportError('No ServerVersionInfo in response: %s' % response.text)
+            raise TransportError('No ServerVersionInfo in response: %s' % response)
         try:
-            build = Build.from_xml(info)
+            build = Build.from_xml(elem=info)
         except ValueError:
-            raise TransportError('Bad ServerVersionInfo in response: %s' % response.text)
+            raise TransportError('Bad ServerVersionInfo in response: %s' % response)
         # Not all Exchange servers send the Version element
         api_version_from_server = info.get('Version') or build.api_version()
         if api_version_from_server != requested_api_version:

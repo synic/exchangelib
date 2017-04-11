@@ -29,24 +29,23 @@ Setup and connecting
 
 .. code-block:: python
 
-    from exchangelib import DELEGATE, IMPERSONATION, Account, Credentials, \
+    from exchangelib import DELEGATE, IMPERSONATION, Account, Credentials, ServiceAccount, \
         EWSDateTime, EWSTimeZone, Configuration, NTLM, CalendarItem, Message, \
-        Mailbox, Attendee, Q
-    from exchangelib.folders import Calendar, ExtendedProperty, FileAttachment, ItemAttachment, \
-        HTMLBody
+        Mailbox, Attendee, Q, Calendar, ExtendedProperty, FileAttachment, ItemAttachment, \
+        HTMLBody, Build, Version
 
     # Username in WINDOMAIN\username format. Office365 wants usernames in PrimarySMTPAddress
     # ('myusername@example.com') format. UPN format is also supported.
     credentials = Credentials(username='MYWINDOMAIN\\myusername', password='topsecret')
 
-    # By default, fault-tolerant error handling is enabled. This means that requests to the server
-    # do an exponential backoff and sleep up to one hour before giving up, if the server is
-    # unavailable or responding with error messages. This prevents automated scripts from overwhelming
-    # a failing or overloaded server, and hides intermittent service outages that often happen in
-    # large Exchange installations.
+    # If you're running long-running jobs, you may want to enable fault-tolerance. Fault-tolerance
+    # means that requests to the server do an exponential backoff and sleep for up to a certain
+    # threshold before giving up, if the server is unavailable or responding with error messages.
+    # This prevents automated scripts from overwhelming a failing or overloaded server, and hides
+    # intermittent service outages that often happen in large Exchange installations.
 
-    # If you want to disable the fault tolerance, unset the 'is_service_account' flag:
-    credentials = Credentials(username='FOO\\bar', password='topsecret', is_service_account=False)
+    # If you want to enable the fault tolerance, create credentials as a service account instead:
+    credentials = ServiceAccount(username='FOO\\bar', password='topsecret')
 
     # Set up a target account and do an autodiscover lookup to find the target EWS endpoint:
     account = Account(primary_smtp_address='john@example.com', credentials=credentials,
@@ -65,10 +64,9 @@ Setup and connecting
                       autodiscover=False, access_type=DELEGATE)
 
     # 'exchangelib' will attempt to guess the server version and authentication method. If you
-    # have a really bizarre or locked-down installation and the guessing fails, you can set the
-    # auth method and version explicitly:
-    from exchangelib.version import Build, Version
-    version = Version(build=Build(15, 0, 12, 34), api_version='Exchange2013')
+    # have a really bizarre or locked-down installation and the guessing fails, or you want to avoid
+    # the extra network traffic, you can set the auth method and version explicitly instead:
+    version = Version(build=Build(15, 0, 12, 34))
     config = Configuration(server='example.com', credentials=credentials, version=version, auth_type=NTLM)
 
     # If you're connecting to the same account very often, you can cache the autodiscover result for
@@ -204,7 +202,7 @@ Here are some examples of using the API:
     ))  # Filter by a date range
     # Same as filter() but throws an error if exactly one item isn't returned
     item = my_folder.get(subject='unique_string')
-    
+
     # You can sort by a single or multiple fields. Prefix a field with '-' to reverse the sorting.
     # Sorting by a single field is efficient. For multiple fields, the sorting is done client-side
     # and must fetch all items in the folder first. This can be slow.
@@ -215,15 +213,15 @@ Here are some examples of using the API:
     # Counting and exists
     n = my_folder.all().count()  # Efficient counting
     folder_is_empty = not my_folder.all().exists()  # Efficient tasting
-    
+
     # Returning values instead of objects
     ids_as_dict = my_folder.all().values('item_id', 'changekey')  # Return values as dicts, not objects
     ids_as_list = my_folder.all().values_list('item_id', 'changekey')  # Return values as nested lists
     all_subjects = my_folder.all().values_list('subject', flat=True)  # Return values as a flat list
 
     # A QuerySet can be sliced like a normal Python list. Slicing from the start of the QuerySet
-    # is efficient (it only fetches the necessary items), but more exotic slicing requires many or all 
-    # items to be fetched from the server. Slicing from the end is also efficient, but then you might as 
+    # is efficient (it only fetches the necessary items), but more exotic slicing requires many or all
+    # items to be fetched from the server. Slicing from the end is also efficient, but then you might as
     # well just reverse the sorting
     first_ten_emails = my_folder.all().order_by('-datetime_received')[:10]  # Efficient
     last_ten_emails = my_folder.all().order_by('-datetime_received')[:-10]  # Efficient, but convoluted
@@ -249,17 +247,16 @@ Here are some examples of using the API:
     qs.filter(subject__icontains='foo')  # Returns items where subject contains 'foo', 'FOO' or 'Foo'
     qs.filter(subject__startswith='foo')  # Returns items where subject starts with 'foo'
     qs.filter(subject__istartswith='foo')  # Returns items where subject starts with 'foo', 'FOO' or 'Foo'
+    # Returns items that have at least one category set, i.e. the field exists on the item on the server
+    qs.filter(categories__exists=True)
+    # Returns items that have no categories set, i.e. the field does not exist on the item on the server
+    qs.filter(categories__exists=False)
 
     # filter() also supports Q objects that are modeled after Django Q objects, for building complex
     # boolean logic search expressions.
     #
     q = (Q(subject__iexact='foo') | Q(subject__contains='bar')) & ~Q(subject__startswith='baz')
     items = my_folder.filter(q)
-
-    # filter() even accepts a Python-like search expression as a string:
-    items = my_folder.filter(
-          "start < '2016-01-02T03:04:05T' and end > '2016-01-01T03:04:05T' and categories in ('foo', 'bar')"
-    )
 
     # In this example, we filter by categories so we only get the items created by us.
     items = account.calendar.filter(

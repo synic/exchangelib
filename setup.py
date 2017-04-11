@@ -14,7 +14,7 @@ def read(fname):
 
 setup(
     name='exchangelib',
-    version='1.8.1',
+    version='1.9.0',
     author='Erik Cederstrand',
     author_email='erik@cederstrand.dk',
     description='Client for Microsoft Exchange Web Services (EWS)',
@@ -24,7 +24,7 @@ setup(
     install_requires=['requests>=2.7', 'requests_ntlm>=0.2.0', 'dnspython>=1.14.0', 'pytz', 'lxml',
                       'cached_property', 'future', 'six'],
     packages=['exchangelib'],
-    tests_require=['PyYAML'],
+    tests_require=['PyYAML', 'requests_mock'],
     test_suite='tests',
     zip_safe=False,
     url='https://github.com/ecederstrand/exchangelib',
