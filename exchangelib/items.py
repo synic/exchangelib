@@ -420,6 +420,11 @@ class CalendarItem(Item):
         AttendeesField('required_attendees', field_uri='calendar:RequiredAttendees', is_searchable=False),
         AttendeesField('optional_attendees', field_uri='calendar:OptionalAttendees', is_searchable=False),
         AttendeesField('resources', field_uri='calendar:Resources', is_searchable=False),
+        BodyField('recurrence', field_uri='calendar:Recurrence'),
+        BodyField('first_occurrence', field_uri='calendar:FirstOccurrence'),
+        BodyField('last_occurrence', field_uri='calendar:LastOccurrence'),
+        BodyField('modified_occurrences', field_uri='calendar:ModifiedOccurrences'),
+        BodyField('deleted_occurrences', field_uri='calendar:DeletedOccurrences'),
     ]
 
     def clean(self, version=None):

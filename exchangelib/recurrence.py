@@ -1,8 +1,6 @@
-from six import text_type
-
 from .ewsdatetime import EWSDate, EWSDateTime
 from .folders import EWSElement
-from .util import create_element, set_xml_value, add_xml_child
+from .util import create_element, add_xml_child
 
 
 # DayOfWeekIndex enum. See https://msdn.microsoft.com/en-us/library/office/aa581350(v=exchg.150).aspx
@@ -21,10 +19,10 @@ APRIL = 'April'
 MAY = 'May'
 JUNE = 'June'
 JULY = 'July'
-AUGUST  ='August'
+AUGUST = 'August'
 SEPTEMBER = 'September'
 OCTOBER = 'October'
-NOVEMBER  ='November'
+NOVEMBER = 'November'
 DECEMBER = 'December'
 MONTHS = (JANUARY, FEBRUARY, MARCH, APRIL, MAY, JUNE, JULY, AUGUST, SEPTEMBER, OCTOBER, NOVEMBER, DECEMBER)
 
@@ -268,7 +266,7 @@ class NoEndPattern(Pattern):
 
 class EndDatePattern(Pattern):
     # MSDN: https://msdn.microsoft.com/en-us/library/office/aa564536(v=exchg.150).aspx
-    ELEMENT_NAME = 'NoEndRecurrence'
+    ELEMENT_NAME = 'EndDateRecurrence'
 
     def __init__(self, start, end):
         """
@@ -343,6 +341,7 @@ class Occurrence(EWSElement):
 # Container elements:
 # 'ModifiedOccurrences'
 # 'DeletedOccurrences'
+
 
 class FirstOccurrence(Occurrence):
     # MSDN: https://msdn.microsoft.com/en-us/library/office/aa565661(v=exchg.150).aspx
