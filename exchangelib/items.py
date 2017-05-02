@@ -8,10 +8,12 @@ from six import string_types
 
 from .ewsdatetime import UTC_NOW
 from .extended_properties import ExtendedProperty
-from .fields import BooleanField, IntegerField, DecimalField, Base64Field, TextField, ChoiceField, \
+from .fields import BooleanField, IntegerField, DecimalField, Base64Field, TextField, TextListField, ChoiceField, \
     URIField, BodyField, DateTimeField, MessageHeaderField, PhoneNumberField, EmailAddressField, PhysicalAddressField, \
-    ExtendedPropertyField, AttachmentField, MailboxField, AttendeesField, TextListField, MailboxListField, Choice
+    ExtendedPropertyField, AttachmentField, RecurrenceField, RecurrenceListField, MailboxField,  MailboxListField, \
+    AttendeesField, Choice
 from .properties import EWSElement, ItemId
+from .recurrence import Recurrence, FirstOccurrence, LastOccurrence, Occurrence, DeletedOccurrence
 from .util import create_element, is_iterable
 from .version import EXCHANGE_2010, EXCHANGE_2013
 
@@ -420,11 +422,11 @@ class CalendarItem(Item):
         AttendeesField('required_attendees', field_uri='calendar:RequiredAttendees', is_searchable=False),
         AttendeesField('optional_attendees', field_uri='calendar:OptionalAttendees', is_searchable=False),
         AttendeesField('resources', field_uri='calendar:Resources', is_searchable=False),
-        BodyField('recurrence', field_uri='calendar:Recurrence'),
-        BodyField('first_occurrence', field_uri='calendar:FirstOccurrence'),
-        BodyField('last_occurrence', field_uri='calendar:LastOccurrence'),
-        BodyField('modified_occurrences', field_uri='calendar:ModifiedOccurrences'),
-        BodyField('deleted_occurrences', field_uri='calendar:DeletedOccurrences'),
+        RecurrenceField('recurrence', field_uri='calendar:Recurrence', value_cls=Recurrence),
+        RecurrenceField('first_occurrence', field_uri='calendar:FirstOccurrence', value_cls=FirstOccurrence),
+        RecurrenceField('last_occurrence', field_uri='calendar:LastOccurrence', value_cls=LastOccurrence),
+        RecurrenceListField('modified_occurrences', field_uri='calendar:ModifiedOccurrences', value_cls=Occurrence),
+        RecurrenceListField('deleted_occurrences', field_uri='calendar:DeletedOccurrences', value_cls=DeletedOccurrence),
     ]
 
     def clean(self, version=None):

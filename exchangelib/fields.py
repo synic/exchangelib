@@ -698,6 +698,14 @@ class AttachmentField(EWSElementField):
         return self.default
 
 
+class RecurrenceField(EWSElementField):
+    is_complex = True
+
+
+class RecurrenceListField(RecurrenceField):
+    is_list = True
+
+
 class LabelField(ChoiceField):
     # A field to hold the label on an IndexedElement
     def from_xml(self, elem):

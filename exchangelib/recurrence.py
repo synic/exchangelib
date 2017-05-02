@@ -3,8 +3,7 @@ import logging
 from six import string_types
 
 from .fields import IntegerField, EnumField, EnumListField, DateField, DateTimeField, EWSElementField
-from .folders import EWSElement
-from .properties import ItemId
+from .properties import EWSElement, ItemId
 
 log = logging.getLogger(__name__)
 
@@ -80,7 +79,7 @@ class ExtraWeekdaysField(EnumListField):
 
 
 class Pattern(EWSElement):
-    pass
+    __slots__ = tuple()
 
 
 class AbsoluteYearlyPattern(Pattern):
@@ -94,9 +93,10 @@ class AbsoluteYearlyPattern(Pattern):
         # value, the last day in the month is assumed
         IntegerField('day_of_month', field_uri='t:DayOfMonth', min=1, max=31),
     ]
+    __slots__ = ('month', 'day_of_month')
 
     def __str__(self):
-        return 'Occurs on the %s. day of %s' % (self.day_of_month, MONTHS[self.month-1])
+        return 'Occurs on day %s of %s' % (self.day_of_month, MONTHS[self.month-1])
 
 
 class RelativeYearlyPattern(Pattern):
@@ -114,6 +114,7 @@ class RelativeYearlyPattern(Pattern):
         # day, weekday, or weekend day in the month, respectively.
         ExtraWeekdaysField('weekdays', field_uri='t:DaysOfWeek'),
     ]
+    __slots__ = ('month', 'week_number', 'weekdays')
 
     def __str__(self):
         return 'Occurs on weekdays %s in the %s week of %s' % (
@@ -132,9 +133,10 @@ class AbsoluteMonthlyPattern(Pattern):
         # value, the last day in the month is assumed
         IntegerField('day_of_month', field_uri='t:DayOfMonth', min=1, max=31),
     ]
+    __slots__ = ('interval', 'day_of_month')
 
     def __str__(self):
-        return 'Occurs on the %s. day of every %s. month' % (self.day_of_month, self.interval)
+        return 'Occurs on day %s of every %s month(s)' % (self.day_of_month, self.interval)
 
 
 class RelativeMonthlyPattern(Pattern):
@@ -152,9 +154,10 @@ class RelativeMonthlyPattern(Pattern):
         # day, weekday, or weekend day in the month, respectively.
         ExtraWeekdaysField('weekdays', field_uri='t:DaysOfWeek'),
     ]
+    __slots__ = ('interval', 'week_number', 'weekdays')
 
     def __str__(self):
-        return 'Occurs on weekdays %s in the %s week of every %s. month' % (
+        return 'Occurs on weekdays %s in the %s week of every %s month(s)' % (
             ', '.join(WEEKDAYS[i - 1] for i in self.weekdays), WEEK_NUMBERS[self.week_number-1], self.interval
         )
 
@@ -171,9 +174,10 @@ class WeeklyPattern(Pattern):
         # The first day of the week. Defaults to Monday
         EnumField('first_day_of_week', field_uri='t:FirstDayOfWeek', enum=WEEKDAYS, default=1),
     ]
+    __slots__ = ('interval', 'weekdays', 'first_day_of_week')
 
     def __str__(self):
-        return 'Occurs on weekdays %s of every %s. week where the first day of the week is %s' % (
+        return 'Occurs on weekdays %s of every %s week(s) where the first day of the week is %s' % (
             ', '.join(WEEKDAYS[i - 1] for i in self.weekdays), self.interval, WEEKDAYS[self.first_day_of_week-1]
         )
 
@@ -186,12 +190,17 @@ class DailyPattern(Pattern):
         # Interval, in days, in range 1 -> 999
         IntegerField('interval', field_uri='t:Interval', min=1, max=999),
     ]
+    __slots__ = ('interval',)
 
     def __str__(self):
-        return 'Occurs every %s. day' % self.interval
+        return 'Occurs every %s day(s)' % self.interval
 
 
-class NoEndPattern(Pattern):
+class Boundary(EWSElement):
+    pass
+
+
+class NoEndPattern(Boundary):
     # MSDN: https://msdn.microsoft.com/en-us/library/office/aa564699(v=exchg.150).aspx
     ELEMENT_NAME = 'NoEndRecurrence'
 
@@ -199,9 +208,10 @@ class NoEndPattern(Pattern):
         # Start date, as EWSDate
         DateField('start', field_uri='t:StartDate'),
     ]
+    __slots__ = ('start',)
 
 
-class EndDatePattern(Pattern):
+class EndDatePattern(Boundary):
     # MSDN: https://msdn.microsoft.com/en-us/library/office/aa564536(v=exchg.150).aspx
     ELEMENT_NAME = 'EndDateRecurrence'
 
@@ -211,9 +221,10 @@ class EndDatePattern(Pattern):
         # End date, as EWSDate
         DateField('end', field_uri='t:EndDate'),
     ]
+    __slots__ = ('start', 'end')
 
 
-class NumberedPattern(Pattern):
+class NumberedPattern(Boundary):
     # MSDN: https://msdn.microsoft.com/en-us/library/office/aa580960(v=exchg.150).aspx
     ELEMENT_NAME = 'NumberedRecurrence'
 
@@ -223,6 +234,7 @@ class NumberedPattern(Pattern):
         # The number of occurrences in this pattern
         IntegerField('number', field_uri='t:NumberOfOccurrences', min=0),
     ]
+    __slots__ = ('start', 'number',)
 
 
 class Occurrence(EWSElement):
@@ -239,6 +251,8 @@ class Occurrence(EWSElement):
         # The original start time of the item, as EWSDateTime
         DateTimeField('original_start', field_uri='t:OriginalStart'),
     ]
+    __slots__ = ('item', 'start', 'end', 'original_start')
+
 
 # Container elements:
 # 'ModifiedOccurrences'
@@ -248,11 +262,13 @@ class Occurrence(EWSElement):
 class FirstOccurrence(Occurrence):
     # MSDN: https://msdn.microsoft.com/en-us/library/office/aa565661(v=exchg.150).aspx
     ELEMENT_NAME = 'FirstOccurrence'
+    __slots__ = Occurrence.__slots__
 
 
 class LastOccurrence(Occurrence):
     # MSDN: https://msdn.microsoft.com/en-us/library/office/aa565375(v=exchg.150).aspx
     ELEMENT_NAME = 'LastOccurrence'
+    __slots__ = Occurrence.__slots__
 
 
 class DeletedOccurrence(EWSElement):
@@ -263,8 +279,43 @@ class DeletedOccurrence(EWSElement):
         # The modified start time of the item, as EWSDateTime
         DateTimeField('start', field_uri='t:Start'),
     ]
+    __slots__ = ('start',)
+
+
+PATTERN_CLASSES = AbsoluteYearlyPattern, RelativeYearlyPattern, AbsoluteMonthlyPattern, RelativeMonthlyPattern, \
+                   WeeklyPattern, DailyPattern
+BOUNDARY_CLASSES = NoEndPattern, EndDatePattern, NumberedPattern
 
 
 class Recurrence(EWSElement):
-    # This is where the fun begins!
-    pass
+    # MSDN: https://msdn.microsoft.com/en-us/library/office/aa580471(v=exchg.150).aspx
+    FIELDS = [
+        EWSElementField('pattern', value_cls=Pattern),
+        EWSElementField('boundary', value_cls=Boundary),
+    ]
+
+    @classmethod
+    def from_xml(cls, elem):
+        for pattern_cls in PATTERN_CLASSES:
+            pattern_elem = elem.find(pattern_cls.response_tag())
+            if pattern_elem is None:
+                continue
+            pattern = pattern_cls.from_xml(pattern_elem)
+            break
+        else:
+            pattern = None
+        for boundary_cls in BOUNDARY_CLASSES:
+            boundary_elem = elem.find(boundary_cls.response_tag())
+            if boundary_elem is None:
+                continue
+            boundary = boundary_cls.from_xml(boundary_elem)
+            break
+        else:
+            boundary = None
+        return cls(pattern=pattern, boundary=boundary)
+
+    def to_xml(self, version):
+        assert False
+
+    def __str__(self):
+        return 'Pattern: %s, Boundary: %s' % (self.pattern, self.boundary)
