@@ -105,7 +105,7 @@ class Item(EWSElement):
         DateTimeField('reminder_due_by', field_uri='item:ReminderDueBy', is_required=False,
                       is_required_after_save=True, is_searchable=False),
         IntegerField('reminder_minutes_before_start', field_uri='item:ReminderMinutesBeforeStart',
-                     is_required_after_save=True, default=0),
+                     is_required_after_save=True, min=0, default=0),
         # ExtendedProperty fields go here
         TextField('last_modified_name', field_uri='item:LastModifiedName', is_read_only=True),
         DateTimeField('last_modified_time', field_uri='item:LastModifiedTime', is_read_only=True),
@@ -521,10 +521,10 @@ class Task(Item):
     # Supported attrs: see https://msdn.microsoft.com/en-us/library/office/aa563930(v=exchg.150).aspx
     # TODO: This list is incomplete
     FIELDS = Item.FIELDS + [
-        IntegerField('actual_work', field_uri='task:ActualWork'),
+        IntegerField('actual_work', field_uri='task:ActualWork', min=0),
         DateTimeField('assigned_time', field_uri='task:AssignedTime', is_read_only=True),
         TextField('billing_information', field_uri='task:BillingInformation'),
-        IntegerField('change_count', field_uri='task:ChangeCount', is_read_only=True),
+        IntegerField('change_count', field_uri='task:ChangeCount', is_read_only=True, min=0),
         TextListField('companies', field_uri='task:Companies'),
         TextListField('contacts', field_uri='task:Contacts'),
         ChoiceField('delegation_state', field_uri='task:DelegationState', choices={
@@ -546,7 +546,7 @@ class Task(Item):
             Choice(NOT_STARTED), Choice('InProgress'), Choice(COMPLETED), Choice('WaitingOnOthers'), Choice('Deferred')
         }, is_required=True, is_searchable=False, default=NOT_STARTED),
         TextField('status_description', field_uri='task:StatusDescription', is_read_only=True),
-        IntegerField('total_work', field_uri='task:TotalWork'),
+        IntegerField('total_work', field_uri='task:TotalWork', min=0),
     ]
 
     def clean(self, version=None):
