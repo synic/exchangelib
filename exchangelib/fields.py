@@ -310,6 +310,28 @@ class BooleanField(FieldURIField):
 class IntegerField(FieldURIField):
     value_cls = int
 
+    def __init__(self, *args, **kwargs):
+        self.min = kwargs.pop('min', None)
+        self.max = kwargs.pop('max', None)
+        super(IntegerField, self).__init__(*args, **kwargs)
+
+    def clean(self, value, version=None):
+        value = super(IntegerField, self).clean(value, version=version)
+        if value is not None:
+            if self.is_list:
+                for v in value:
+                    if self.min is not None and v < self.min:
+                        raise ValueError(
+                            "value '%s' on field '%s' must be greater than %s" % (value, self.name, self.min))
+                    if self.max is not None and v > self.max:
+                        raise ValueError("value '%s' on field '%s' must be less than %s" % (value, self.name, self.max))
+            else:
+                if self.min is not None and value < self.min:
+                    raise ValueError("value '%s' on field '%s' must be greater than %s" % (value, self.name, self.min))
+                if self.max is not None and value > self.max:
+                    raise ValueError("value '%s' on field '%s' must be less than %s" % (value, self.name, self.max))
+        return value
+
     def from_xml(self, elem):
         field_elem = elem.find(self.response_tag())
         val = None if field_elem is None else field_elem.text or None
