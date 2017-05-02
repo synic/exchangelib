@@ -8,7 +8,7 @@ import logging
 from six import string_types
 
 from .errors import ErrorInvalidServerVersion
-from .ewsdatetime import EWSDateTime
+from .ewsdatetime import EWSDateTime, EWSDate
 from .services import TNS
 from .util import create_element, get_xml_attrs, set_xml_value, value_to_xml_text, is_iterable
 from .version import Build
@@ -344,19 +344,64 @@ class IntegerField(FieldURIField):
         return self.default
 
 
-class DecimalField(FieldURIField):
+class DecimalField(IntegerField):
     value_cls = Decimal
+
+
+class EnumField(IntegerField):
+    # A field type where you can enter either the 1-based index in an enum (tuple), or the enum value. Values will be
+    # stored internally as integers.
+    def __init__(self, *args, **kwargs):
+        self.enum = kwargs.pop('enum')
+        super(EnumField, self).__init__(*args, **kwargs)
+        self.min = 1
+        self.max = len(self.enum)
+
+    def clean(self, value, version=None):
+        if isinstance(value, string_types):
+            if value not in self.enum:
+                raise ValueError(
+                    "Value '%s' on field '%s' must be one of %s" % (value, self.name, self.enum))
+            value = self.enum.index(value) + 1
+        return super(EnumField, self).clean(value, version=version)
 
     def from_xml(self, elem):
         field_elem = elem.find(self.response_tag())
         val = None if field_elem is None else field_elem.text or None
         if val is not None:
             try:
-                return self.value_cls(val)
+                return self.enum.index(val)
             except ValueError:
                 log.warning("Cannot convert value '%s' on field '%s' to type %s", val, self.name, self.value_cls)
                 return None
         return self.default
+
+    def to_xml(self, value, version):
+        field_elem = create_element(self.request_tag())
+        return set_xml_value(field_elem, self.enum[value-1], version=version)
+
+
+class EnumListField(EnumField):
+    is_list = True
+
+    def clean(self, value, version=None):
+        value = list(value)  # Convert to something we can index
+        for i, v in enumerate(value):
+            if isinstance(value, string_types):
+                if v not in self.enum:
+                    raise ValueError(
+                        "List value '%s' on field '%s' must be one of %s" % (v, self.name, self.enum))
+                value[i] = self.enum.index(v) + 1
+        if not len(value):
+            raise ValueError("Value '%s' on field '%s' must not be empty" % (value, self.name))
+        if len(value) > len(set(value)):
+            raise ValueError("List entries '%s' on field '%s' must be unique" % (value, self.name))
+        return super(EnumField, self).clean(value, version=version)
+
+    def to_xml(self, value, version):
+        field_elem = create_element(self.request_tag())
+        return set_xml_value(field_elem, ' '.join(self.enum[i-1] for i in sorted(value)), version=version)
+
 
 
 class Base64Field(FieldURIField):
@@ -374,11 +419,15 @@ class Base64Field(FieldURIField):
         return set_xml_value(field_elem, base64.b64encode(value).decode('ascii'), version=version)
 
 
+class DateField(FieldURIField):
+    value_cls = EWSDate
+
+
 class DateTimeField(FieldURIField):
     value_cls = EWSDateTime
 
     def clean(self, value, version=None):
-        if value is not None and isinstance(value, EWSDateTime) and not value.tzinfo:
+        if value is not None and isinstance(value, self.value_cls) and not value.tzinfo:
             raise ValueError("Field '%s' must be timezone aware" % self.name)
         return super(DateTimeField, self).clean(value, version=version)
 
