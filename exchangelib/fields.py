@@ -422,6 +422,17 @@ class Base64Field(FieldURIField):
 class DateField(FieldURIField):
     value_cls = EWSDate
 
+    def from_xml(self, elem):
+        field_elem = elem.find(self.response_tag())
+        val = None if field_elem is None else field_elem.text or None
+        if val is not None:
+            try:
+                return self.value_cls.from_string(val)
+            except ValueError:
+                log.warning("Cannot convert value '%s' on field '%s' to type %s", val, self.name, self.value_cls)
+                return None
+        return self.default
+
 
 class DateTimeField(FieldURIField):
     value_cls = EWSDateTime
