@@ -370,7 +370,10 @@ class EnumField(IntegerField):
         val = None if field_elem is None else field_elem.text or None
         if val is not None:
             try:
-                return self.enum.index(val)
+                if self.is_list:
+                    return [self.enum.index(v) for v in val.split(' ')]
+                else:
+                    return self.enum.index(val)
             except ValueError:
                 log.warning("Cannot convert value '%s' on field '%s' to type %s", val, self.name, self.value_cls)
                 return None
@@ -378,7 +381,10 @@ class EnumField(IntegerField):
 
     def to_xml(self, value, version):
         field_elem = create_element(self.request_tag())
-        return set_xml_value(field_elem, self.enum[value-1], version=version)
+        if self.is_list:
+            return set_xml_value(field_elem, ' '.join(self.enum[i - 1] for i in sorted(value)), version=version)
+        else:
+            return set_xml_value(field_elem, self.enum[value-1], version=version)
 
 
 class EnumListField(EnumField):
@@ -397,11 +403,6 @@ class EnumListField(EnumField):
         if len(value) > len(set(value)):
             raise ValueError("List entries '%s' on field '%s' must be unique" % (value, self.name))
         return super(EnumField, self).clean(value, version=version)
-
-    def to_xml(self, value, version):
-        field_elem = create_element(self.request_tag())
-        return set_xml_value(field_elem, ' '.join(self.enum[i-1] for i in sorted(value)), version=version)
-
 
 
 class Base64Field(FieldURIField):
