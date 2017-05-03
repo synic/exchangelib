@@ -960,9 +960,9 @@ class EWSTest(unittest.TestCase):
         if isinstance(field, BooleanField):
             return get_random_bool()
         if isinstance(field, IntegerField):
-            return get_random_int(0, 256)
+            return get_random_int(field.min or 0, field.max or 256)
         if isinstance(field, DecimalField):
-            return get_random_decimal(1, 99)
+            return get_random_decimal(field.min or 1, field.max or 99)
         if isinstance(field, DateTimeField):
             return get_random_datetime()
         if isinstance(field, AttachmentField):
@@ -2942,7 +2942,7 @@ class BaseItemTest(EWSTest):
             len(self.test_folder.filter('subject:%s' % item.subject)),
             (0, 1)
         )
-        item.delete()
+        item.delete(affected_task_occurrences=ALL_OCCURRENCIES)
 
     def test_filter_on_all_fields(self):
         # Test that we can filter on all field names that we support filtering on
@@ -3492,7 +3492,7 @@ class BaseItemTest(EWSTest):
         item.save()
         item = list(self.account.fetch(ids=[(item.item_id, item.changekey)]))[0]
         self.assertEqual(prop_val, item.dead_beef)
-        new_prop_val = get_random_int()
+        new_prop_val = get_random_int(0, 256)
         item.dead_beef = new_prop_val
         item.save()
         item = list(self.account.fetch(ids=[(item.item_id, item.changekey)]))[0]

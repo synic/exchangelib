@@ -605,9 +605,11 @@ class EWSElementField(FieldURIField):
         return set_xml_value(field_elem, value, version=version)
 
 
-class MessageHeaderField(EWSElementField):
+class EWSElementListField(EWSElementField):
     is_list = True
 
+
+class MessageHeaderField(EWSElementListField):
     def __init__(self, *args, **kwargs):
         from .properties import MessageHeader
         kwargs['value_cls'] = MessageHeader
@@ -639,9 +641,7 @@ class MailboxField(EWSElementField):
         return self.default
 
 
-class MailboxListField(EWSElementField):
-    is_list = True
-
+class MailboxListField(EWSElementListField):
     def __init__(self, *args, **kwargs):
         from .properties import Mailbox
         kwargs['value_cls'] = Mailbox
@@ -659,9 +659,7 @@ class MailboxListField(EWSElementField):
         return self.default
 
 
-class AttendeesField(EWSElementField):
-    is_list = True
-
+class AttendeesField(EWSElementListField):
     def __init__(self, *args, **kwargs):
         from .properties import Attendee
         kwargs['value_cls'] = Attendee
@@ -675,8 +673,7 @@ class AttendeesField(EWSElementField):
         return super(AttendeesField, self).clean(value, version=version)
 
 
-class AttachmentField(EWSElementField):
-    is_list = True
+class AttachmentField(EWSElementListField):
     is_complex = True
 
     def __init__(self, *args, **kwargs):
@@ -696,14 +693,6 @@ class AttachmentField(EWSElementField):
                 )
             return attachments
         return self.default
-
-
-class RecurrenceField(EWSElementField):
-    is_complex = True
-
-
-class RecurrenceListField(RecurrenceField):
-    is_list = True
 
 
 class LabelField(ChoiceField):

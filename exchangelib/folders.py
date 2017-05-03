@@ -65,7 +65,7 @@ class CalendarView(EWSElement):
     FIELDS = [
         DateTimeField('start', field_uri='StartDate', is_required=True),
         DateTimeField('end', field_uri='EndDate', is_required=True),
-        IntegerField('max_items', field_uri='MaxEntriesReturned', min=0),
+        IntegerField('max_items', field_uri='MaxEntriesReturned', min=1),
     ]
 
     __slots__ = ('start', 'end', 'max_items')
