@@ -10,10 +10,10 @@ from .ewsdatetime import UTC_NOW
 from .extended_properties import ExtendedProperty
 from .fields import BooleanField, IntegerField, DecimalField, Base64Field, TextField, TextListField, ChoiceField, \
     URIField, BodyField, DateTimeField, MessageHeaderField, PhoneNumberField, EmailAddressField, PhysicalAddressField, \
-    ExtendedPropertyField, AttachmentField, EWSElementField, EWSElementListField, MailboxField,  MailboxListField, \
-    AttendeesField, Choice
+    ExtendedPropertyField, AttachmentField, RecurrenceField, MailboxField,  MailboxListField, \
+    AttendeesField, Choice, OccurrenceField, OccurrenceListField
 from .properties import EWSElement, ItemId
-from .recurrence import Recurrence, FirstOccurrence, LastOccurrence, Occurrence, DeletedOccurrence
+from .recurrence import FirstOccurrence, LastOccurrence, Occurrence, DeletedOccurrence
 from .util import create_element, is_iterable
 from .version import EXCHANGE_2010, EXCHANGE_2013
 
@@ -412,21 +412,23 @@ class CalendarItem(Item):
         DateTimeField('start', field_uri='calendar:Start', is_required=True),
         DateTimeField('end', field_uri='calendar:End', is_required=True),
         BooleanField('is_all_day', field_uri='calendar:IsAllDayEvent', is_required=True, default=False),
-        # TODO: The 'WorkingElsewhere' status was added in Exchange2015 but we don't support versioned choices yet
         ChoiceField('legacy_free_busy_status', field_uri='calendar:LegacyFreeBusyStatus', choices={
             Choice('Free'), Choice('Tentative'), Choice('Busy'), Choice('OOF'), Choice('NoData'),
             Choice('WorkingElsewhere', supported_from=EXCHANGE_2013)
         }, is_required=True, default='Busy'),
         TextField('location', field_uri='calendar:Location', max_length=255),
+        ChoiceField('type', field_uri='calendar:CalendarItemType', choices={
+            Choice('Single'), Choice('Occurrence'), Choice('Exception'), Choice('RecurringMaster'),
+        }, is_read_only=True),
         MailboxField('organizer', field_uri='calendar:Organizer', is_read_only=True),
         AttendeesField('required_attendees', field_uri='calendar:RequiredAttendees', is_searchable=False),
         AttendeesField('optional_attendees', field_uri='calendar:OptionalAttendees', is_searchable=False),
         AttendeesField('resources', field_uri='calendar:Resources', is_searchable=False),
-        EWSElementField('recurrence', field_uri='calendar:Recurrence', value_cls=Recurrence, is_read_only=True),
-        EWSElementField('first_occurrence', field_uri='calendar:FirstOccurrence', value_cls=FirstOccurrence, is_read_only=True),
-        EWSElementField('last_occurrence', field_uri='calendar:LastOccurrence', value_cls=LastOccurrence, is_read_only=True),
-        EWSElementListField('modified_occurrences', field_uri='calendar:ModifiedOccurrences', value_cls=Occurrence, is_read_only=True),
-        EWSElementListField('deleted_occurrences', field_uri='calendar:DeletedOccurrences', value_cls=DeletedOccurrence, is_read_only=True),
+        RecurrenceField('recurrence', field_uri='calendar:Recurrence', is_searchable=False),
+        OccurrenceField('first_occurrence', field_uri='calendar:FirstOccurrence', value_cls=FirstOccurrence, is_read_only=True),
+        OccurrenceField('last_occurrence', field_uri='calendar:LastOccurrence', value_cls=LastOccurrence, is_read_only=True),
+        OccurrenceListField('modified_occurrences', field_uri='calendar:ModifiedOccurrences', value_cls=Occurrence, is_read_only=True),
+        OccurrenceListField('deleted_occurrences', field_uri='calendar:DeletedOccurrences', value_cls=DeletedOccurrence, is_read_only=True),
     ]
 
     def clean(self, version=None):

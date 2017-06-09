@@ -371,9 +371,9 @@ class EnumField(IntegerField):
         if val is not None:
             try:
                 if self.is_list:
-                    return [self.enum.index(v) for v in val.split(' ')]
+                    return [self.enum.index(v) + 1 for v in val.split(' ')]
                 else:
-                    return self.enum.index(val)
+                    return self.enum.index(val) + 1
             except ValueError:
                 log.warning("Cannot convert value '%s' on field '%s' to type %s", val, self.name, self.value_cls)
                 return None
@@ -382,9 +382,9 @@ class EnumField(IntegerField):
     def to_xml(self, value, version):
         field_elem = create_element(self.request_tag())
         if self.is_list:
-            return set_xml_value(field_elem, ' '.join(self.enum[i - 1] for i in sorted(value)), version=version)
+            return set_xml_value(field_elem, ' '.join(self.enum[v - 1] for v in sorted(value)), version=version)
         else:
-            return set_xml_value(field_elem, self.enum[value-1], version=version)
+            return set_xml_value(field_elem, self.enum[value - 1], version=version)
 
 
 class EnumListField(EnumField):
@@ -393,7 +393,7 @@ class EnumListField(EnumField):
     def clean(self, value, version=None):
         value = list(value)  # Convert to something we can index
         for i, v in enumerate(value):
-            if isinstance(value, string_types):
+            if isinstance(v, string_types):
                 if v not in self.enum:
                     raise ValueError(
                         "List value '%s' on field '%s' must be one of %s" % (v, self.name, self.enum))
@@ -407,6 +407,7 @@ class EnumListField(EnumField):
 
 class Base64Field(FieldURIField):
     value_cls = bytes
+    is_complex = True
 
     def from_xml(self, elem):
         field_elem = elem.find(self.response_tag())
@@ -463,7 +464,7 @@ class TextField(FieldURIField):
     value_cls = string_type
 
     def __init__(self, *args, **kwargs):
-        self.max_length = kwargs.pop('max_length', None)
+        self.max_length = kwargs.pop('max_length', 255)  # Fields supporting longer messages are complex fields
         super(TextField, self).__init__(*args, **kwargs)
 
     def clean(self, value, version=None):
@@ -550,6 +551,7 @@ class BodyField(TextField):
         from .properties import Body
         self.value_cls = Body
         super(BodyField, self).__init__(*args, **kwargs)
+        self.max_length = None
 
     def clean(self, value, version=None):
         if value is not None and not isinstance(value, self.value_cls):
@@ -609,7 +611,27 @@ class EWSElementListField(EWSElementField):
     is_list = True
 
 
+class RecurrenceField(EWSElementField):
+    def __init__(self, *args, **kwargs):
+        from .recurrence import Recurrence
+        kwargs['value_cls'] = Recurrence
+        super(RecurrenceField, self).__init__(*args, **kwargs)
+
+    def to_xml(self, value, version):
+        return value.to_xml(version=version)
+
+
+class OccurrenceField(EWSElementField):
+    is_complex = True
+
+
+class OccurrenceListField(OccurrenceField):
+    is_list = True
+
+
 class MessageHeaderField(EWSElementListField):
+    is_complex = True
+
     def __init__(self, *args, **kwargs):
         from .properties import MessageHeader
         kwargs['value_cls'] = MessageHeader
@@ -617,6 +639,8 @@ class MessageHeaderField(EWSElementListField):
 
 
 class MailboxField(EWSElementField):
+    is_complex = True  # FindItem only returns the name, not the email address
+
     def __init__(self, *args, **kwargs):
         from .properties import Mailbox
         kwargs['value_cls'] = Mailbox
@@ -642,6 +666,8 @@ class MailboxField(EWSElementField):
 
 
 class MailboxListField(EWSElementListField):
+    is_complex = True
+
     def __init__(self, *args, **kwargs):
         from .properties import Mailbox
         kwargs['value_cls'] = Mailbox
@@ -660,6 +686,8 @@ class MailboxListField(EWSElementListField):
 
 
 class AttendeesField(EWSElementListField):
+    is_complex = True
+
     def __init__(self, *args, **kwargs):
         from .properties import Attendee
         kwargs['value_cls'] = Attendee

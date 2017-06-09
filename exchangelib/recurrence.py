@@ -2,7 +2,7 @@ import logging
 
 from six import string_types
 
-from .fields import IntegerField, EnumField, EnumListField, DateField, DateTimeField, EWSElementField
+from .fields import IntegerField, TextField, EnumField, EnumListField, DateField, DateTimeField, EWSElementField
 from .properties import EWSElement, ItemId
 
 log = logging.getLogger(__name__)
@@ -88,10 +88,10 @@ class AbsoluteYearlyPattern(Pattern):
 
     FIELDS = [
         # The month of the year, from 1 - 12
-        EnumField('month', field_uri='t:Month', enum=MONTHS),
+        EnumField('month', field_uri='t:Month', enum=MONTHS, is_required=True),
         # The day of month of an occurrence, in range 1 -> 31. If a particular month has less days than the day_of_month
         # value, the last day in the month is assumed
-        IntegerField('day_of_month', field_uri='t:DayOfMonth', min=1, max=31),
+        IntegerField('day_of_month', field_uri='t:DayOfMonth', min=1, max=31, is_required=True),
     ]
     __slots__ = ('month', 'day_of_month')
 
@@ -105,14 +105,14 @@ class RelativeYearlyPattern(Pattern):
 
     FIELDS = [
         # The month of the year, from 1 - 12
-        EnumField('month', field_uri='t:Month', enum=MONTHS),
+        EnumField('month', field_uri='t:Month', enum=MONTHS, is_required=True),
         # Week number of the month, in range 1 -> 5. If 5 is specified, this assumes the last week of the month for
         # months that have only 4 weeks
-        EnumField('week_number', field_uri='t:DayOfWeekIndex', enum=WEEK_NUMBERS),
+        EnumField('week_number', field_uri='t:DayOfWeekIndex', enum=WEEK_NUMBERS, is_required=True),
         # List of valid ISO 8601 weekdays, as list of numbers in range 1 -> 7 (1 being Monday). Alternatively, weekdays
         # can be one of the DAY (or 8), WEEK_DAY (or 9) or WEEKEND_DAY (or 10) consts which is interpreted as the first
         # day, weekday, or weekend day in the month, respectively.
-        ExtraWeekdaysField('weekdays', field_uri='t:DaysOfWeek'),
+        ExtraWeekdaysField('weekdays', field_uri='t:DaysOfWeek', is_required=True),
     ]
     __slots__ = ('month', 'week_number', 'weekdays')
 
@@ -128,10 +128,10 @@ class AbsoluteMonthlyPattern(Pattern):
 
     FIELDS = [
         # Interval, in months, in range 1 -> 99
-        IntegerField('interval', field_uri='t:Interval', min=1, max=99),
+        IntegerField('interval', field_uri='t:Interval', min=1, max=99, is_required=True),
         # The day of month of an occurrence, in range 1 -> 31. If a particular month has less days than the day_of_month
         # value, the last day in the month is assumed
-        IntegerField('day_of_month', field_uri='t:DayOfMonth', min=1, max=31),
+        IntegerField('day_of_month', field_uri='t:DayOfMonth', min=1, max=31, is_required=True),
     ]
     __slots__ = ('interval', 'day_of_month')
 
@@ -145,14 +145,14 @@ class RelativeMonthlyPattern(Pattern):
 
     FIELDS = [
         # Interval, in months, in range 1 -> 99
-        IntegerField('interval', field_uri='t:Interval', min=1, max=99),
+        IntegerField('interval', field_uri='t:Interval', min=1, max=99, is_required=True),
         # Week number of the month, in range 1 -> 5. If 5 is specified, this assumes the last week of the month for
         # months that have only 4 weeks.
-        EnumField('week_number', field_uri='t:DayOfWeekIndex', enum=WEEK_NUMBERS),
+        EnumField('week_number', field_uri='t:DayOfWeekIndex', enum=WEEK_NUMBERS, is_required=True),
         # List of valid ISO 8601 weekdays, as list of numbers in range 1 -> 7 (1 being Monday). Alternatively, weekdays
         # can be one of the DAY (or 8), WEEK_DAY (or 9) or WEEKEND_DAY (or 10) consts which is interpreted as the first
         # day, weekday, or weekend day in the month, respectively.
-        ExtraWeekdaysField('weekdays', field_uri='t:DaysOfWeek'),
+        ExtraWeekdaysField('weekdays', field_uri='t:DaysOfWeek', is_required=True),
     ]
     __slots__ = ('interval', 'week_number', 'weekdays')
 
@@ -168,11 +168,11 @@ class WeeklyPattern(Pattern):
 
     FIELDS = [
         # Interval, in weeks, in range 1 -> 99
-        IntegerField('interval', field_uri='t:Interval', min=1, max=99),
+        IntegerField('interval', field_uri='t:Interval', min=1, max=99, is_required=True),
         # List of valid ISO 8601 weekdays, as list of numbers in range 1 -> 7 (1 being Monday)
-        EnumListField('weekdays', field_uri='t:DaysOfWeek', enum=WEEKDAYS),
+        EnumListField('weekdays', field_uri='t:DaysOfWeek', enum=WEEKDAYS, is_required=True),
         # The first day of the week. Defaults to Monday
-        EnumField('first_day_of_week', field_uri='t:FirstDayOfWeek', enum=WEEKDAYS, default=1),
+        EnumField('first_day_of_week', field_uri='t:FirstDayOfWeek', enum=WEEKDAYS, default=1, is_required=True),
     ]
     __slots__ = ('interval', 'weekdays', 'first_day_of_week')
 
@@ -188,7 +188,7 @@ class DailyPattern(Pattern):
 
     FIELDS = [
         # Interval, in days, in range 1 -> 999
-        IntegerField('interval', field_uri='t:Interval', min=1, max=999),
+        IntegerField('interval', field_uri='t:Interval', min=1, max=999, is_required=True),
     ]
     __slots__ = ('interval',)
 
@@ -206,7 +206,7 @@ class NoEndPattern(Boundary):
 
     FIELDS = [
         # Start date, as EWSDate
-        DateField('start', field_uri='t:StartDate'),
+        DateField('start', field_uri='t:StartDate', is_required=True),
     ]
     __slots__ = ('start',)
 
@@ -217,9 +217,9 @@ class EndDatePattern(Boundary):
 
     FIELDS = [
         # Start date, as EWSDate
-        DateField('start', field_uri='t:StartDate'),
+        DateField('start', field_uri='t:StartDate', is_required=True),
         # End date, as EWSDate
-        DateField('end', field_uri='t:EndDate'),
+        DateField('end', field_uri='t:EndDate', is_required=True),
     ]
     __slots__ = ('start', 'end')
 
@@ -230,9 +230,9 @@ class NumberedPattern(Boundary):
 
     FIELDS = [
         # Start date, as EWSDate
-        DateField('start', field_uri='t:StartDate'),
+        DateField('start', field_uri='t:StartDate', is_required=True),
         # The number of occurrences in this pattern
-        IntegerField('number', field_uri='t:NumberOfOccurrences', min=0),
+        IntegerField('number', field_uri='t:NumberOfOccurrences', min=0, is_required=True),
     ]
     __slots__ = ('start', 'number',)
 
@@ -242,8 +242,8 @@ class Occurrence(EWSElement):
     ELEMENT_NAME = 'Occurrence'
 
     FIELDS = [
-        # The item_id and changekey of a modified item occurrence
-        EWSElementField('item', value_cls=ItemId, is_read_only=True),
+        TextField('item_id', is_read_only=True, is_searchable=False),
+        TextField('changekey', is_read_only=True, is_searchable=False),
         # The modified start time of the item, as EWSDateTime
         DateTimeField('start', field_uri='t:Start'),
         # The modified end time of the item, as EWSDateTime
@@ -251,7 +251,22 @@ class Occurrence(EWSElement):
         # The original start time of the item, as EWSDateTime
         DateTimeField('original_start', field_uri='t:OriginalStart'),
     ]
-    __slots__ = ('item', 'start', 'end', 'original_start')
+    __slots__ = ('item_id', 'changekey', 'start', 'end', 'original_start')
+
+    @classmethod
+    def id_from_xml(cls, elem):
+        id_elem = elem.find(ItemId.response_tag())
+        if id_elem is None:
+            return None, None
+        return id_elem.get(ItemId.ID_ATTR), id_elem.get(ItemId.CHANGEKEY_ATTR)
+
+    @classmethod
+    def from_xml(cls, elem):
+        assert elem.tag == cls.response_tag(), (cls, elem.tag, cls.response_tag())
+        item_id, changekey = cls.id_from_xml(elem)
+        kwargs = {f.name: f.from_xml(elem=elem) for f in cls.supported_fields()}
+        elem.clear()
+        return cls(item_id=item_id, changekey=changekey, **kwargs)
 
 
 # Container elements:
@@ -289,10 +304,32 @@ BOUNDARY_CLASSES = NoEndPattern, EndDatePattern, NumberedPattern
 
 class Recurrence(EWSElement):
     # MSDN: https://msdn.microsoft.com/en-us/library/office/aa580471(v=exchg.150).aspx
+    ELEMENT_NAME = 'Recurrence'
+
     FIELDS = [
         EWSElementField('pattern', value_cls=Pattern),
         EWSElementField('boundary', value_cls=Boundary),
     ]
+
+    __slots__ = ('pattern', 'boundary')
+
+    def __init__(self, **kwargs):
+        # Allow specifying a start, end and/or number as a shortcut to creating a boundary
+        start = kwargs.pop('start', None)
+        end = kwargs.pop('end', None)
+        number = kwargs.pop('number', None)
+        if any([start, end, number]):
+            if 'boundary' in kwargs:
+                raise ValueError("'boundary' is not allowed in combination with 'start', 'end' or 'number'")
+            if start and not end and not number:
+                kwargs['boundary'] = NoEndPattern(start=start)
+            elif start and end and not number:
+                kwargs['boundary'] = EndDatePattern(start=start, end=end)
+            elif start and number and not end:
+                kwargs['boundary'] = NumberedPattern(start=start, number=number)
+            else:
+                raise ValueError("Unsupported 'start', 'end', 'number' combination")
+        super(Recurrence, self).__init__(**kwargs)
 
     @classmethod
     def from_xml(cls, elem):
@@ -315,9 +352,6 @@ class Recurrence(EWSElement):
         else:
             boundary = None
         return cls(pattern=pattern, boundary=boundary)
-
-    def to_xml(self, version):
-        assert False
 
     def __str__(self):
         return 'Pattern: %s, Boundary: %s' % (self.pattern, self.boundary)
