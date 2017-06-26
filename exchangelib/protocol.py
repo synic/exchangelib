@@ -270,6 +270,6 @@ class EWSSession(requests.sessions.Session):
         for _ in range(pool.pool.qsize()):
             conn = pool._get_conn()
             if conn.sock:
-                log.debug('Closing socket %s', text_type(conn.sock.getsockname()))
+                log.debug('Closing socket %s', text_type(conn.sock.socket.getsockname()))
                 conn.sock.shutdown(socket.SHUT_RDWR)
                 conn.sock.close()
