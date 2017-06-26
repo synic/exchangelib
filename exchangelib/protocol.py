@@ -271,5 +271,5 @@ class EWSSession(requests.sessions.Session):
             conn = pool._get_conn()
             if conn.sock:
                 log.debug('Closing socket %s', text_type(conn.sock.socket.getsockname()))
-                conn.sock.shutdown(socket.SHUT_RDWR)
+                conn.sock.socket.shutdown(socket.SHUT_RDWR)
                 conn.sock.close()
