@@ -10,7 +10,7 @@ from six import string_types
 from .errors import ErrorInvalidServerVersion
 from .ewsdatetime import EWSDateTime, EWSDate, NaiveDateTimeNotAllowed
 from .services import TNS
-from .util import create_element, get_xml_attrs, set_xml_value, value_to_xml_text, is_iterable
+from .util import create_element, get_xml_attr, get_xml_attrs, set_xml_value, value_to_xml_text, is_iterable
 from .version import Build
 
 string_type = string_types[0]
@@ -403,6 +403,26 @@ class EnumField(IntegerField):
             return set_xml_value(field_elem, ' '.join(self.enum[v - 1] for v in sorted(value)), version=version)
         else:
             return set_xml_value(field_elem, self.enum[value - 1], version=version)
+
+
+class EffectiveRightsField(FieldURIField):
+    RIGHTS = ('CreateAssociated', 'CreateContents', 'CreateHierarchy',
+              'Delete', 'Modify', 'Read', 'ViewPrivateItems')
+
+    def from_xml(self, elem, account):
+        field_elem = elem.find(self.response_tag())
+        effective_rights = []
+
+        for right in self.RIGHTS:
+            value = get_xml_attr(
+                field_elem, '{%s}%s' % (TNS, right))
+            if value == 'true':
+                effective_rights.append(right)
+
+        return effective_rights
+
+    def to_xml(self, value, version):
+        import ipdb; ipdb.set_trace()
 
 
 class EnumListField(EnumField):

@@ -7,7 +7,7 @@ from future.utils import python_2_unicode_compatible
 from six import string_types
 
 from .ewsdatetime import EWSDateTime, UTC
-from .fields import IntegerField, TextField, DateTimeField, FieldPath
+from .fields import EffectiveRightsField, IntegerField, TextField, DateTimeField, FieldPath
 from .items import Item, CalendarItem, Contact, Message, Task, MeetingRequest, MeetingResponse, MeetingCancellation, \
     DistributionList, ITEM_CLASSES, ITEM_TRAVERSAL_CHOICES, SHAPE_CHOICES, IdOnly
 from .properties import ItemId, EWSElement
@@ -104,10 +104,11 @@ class Folder(EWSElement):
         IntegerField('total_count', field_uri='folder:TotalCount', is_read_only=True),
         IntegerField('unread_count', field_uri='folder:UnreadCount', is_read_only=True),
         IntegerField('child_folder_count', field_uri='folder:ChildFolderCount', is_read_only=True),
+        # EffectiveRightsField('effective_rights', field_uri='folder:EffectiveRights'),
     ]
 
     __slots__ = ('account', 'folder_id', 'changekey', 'name', 'folder_class', 'total_count', 'unread_count',
-                 'child_folder_count')
+                 'child_folder_count', )#'effective_rights')
 
     def __init__(self, **kwargs):
         self.account = kwargs.pop('account', None)
